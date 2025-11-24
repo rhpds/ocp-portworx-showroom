@@ -2,9 +2,6 @@
 
 In this scerario, we will create a virtual machine snapshot.
 
-We have created a new virtual machine that we will be using for this
-exercise.
-
 == Virtual Machine Snapshots
 
 === Task 1: Create a VolumeSnapshotClass

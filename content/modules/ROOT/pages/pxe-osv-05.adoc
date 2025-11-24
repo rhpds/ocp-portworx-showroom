@@ -251,10 +251,4 @@ Notice the size of the data disk mounted at `/data`
 
 You've just configured Portworx Autopilot and observed how it can perform automated capacity management based on rules you configure, and be able to ``right-size'' your underlying persistent storage as it is needed!
 
-=== Useful links:
 
-https://docs.portworx.com/portworx-enterprise/operations/operate-kubernetes/storage-operations/manage-kubevirt-vms.html
-
-https://docs.openshift.com/dedicated/virt/virtual_machines/virtual_disks/virt-expanding-vm-disks.html
-
-https://kubevirt.io/user-guide/storage/disks_and_volumes/#disk-expansion
