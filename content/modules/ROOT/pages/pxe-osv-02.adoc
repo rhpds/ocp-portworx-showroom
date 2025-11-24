@@ -20,16 +20,8 @@ ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa -N ""
 
 [source,sh,role=execute]
 ----
-cat << EOF | oc apply -f -
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: authorized-keys
-  namespace: vmtest
-data:
-  key: $(cat ~/.ssh/id_rsa.pub | base64 -w0)
-EOF
+\
+
 ----
 
 === Task 3: Create an OpenShift Virtual Machine
@@ -92,8 +84,9 @@ We can check the status of the VM running this command.
 
 [source,sh,role=execute]
 ----
-watch oc get vms
+watch oc get vms,dv
 ----
+Provision will take a couple of minutes.
 
 Once the VM is running, ctrl-c to exit.  We can then log into this VM using this command (if you do so make sure to exit again by pressing `Ctrl-D` or typing `exit` and pressing `Enter`):
 
