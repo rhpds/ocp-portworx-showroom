@@ -106,6 +106,8 @@ Take a look at our current manifest by using the cat utility:
 cat -n $HOME/px-spec.yaml
 ----
 
+The StorageCluster CR controls the configuration of the Portworx cluster. Some of the important lines are:
+
 * Line 9 tells Portworx that we are installing on an Openshift cluster
 * Line 11 contains the Portworx image we are using. Upgrading Portworx is as easy as changing this line.
 * Lines 15-17 contain our disk configuration. These disks will be created and attached as part of the Portworx installation.
@@ -324,7 +326,7 @@ It is also possible to install the Operator and HyperConverged object using the 
 the CLI to make the process more repeatable
 ====
 
-Let's check the PVCs for the vm images.  You should see the status as Bound and the Access MOde as RWX
+Let's check the PVCs for the vm images.  You should see the status as Bound and the Access Mode as RWX
 
 [source,sh,role=execute]
 ----
