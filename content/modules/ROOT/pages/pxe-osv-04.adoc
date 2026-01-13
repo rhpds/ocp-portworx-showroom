@@ -2,6 +2,15 @@
 
 In this scerario, we will create a virtual machine snapshot.
 
+
+====
+[TIP]
+
+The {openshift_cluster_console_url}[OpenShift Web Console^] tab will open in a new browser window.
+
+The username is `{openshift_cluster_admin_username}` and the password is `{openshift_cluster_admin_password}`
+====
+
 == Virtual Machine Snapshots
 
 === Task 1: Create a VolumeSnapshotClass

@@ -12,6 +12,15 @@ With Autopilot, your cluster can react dynamically without your intervention to 
 
 In this scenario, we will use Autopilot to detect when a VM's disk is filling up, and automatically expand that disk.
 
+
+====
+[TIP]
+
+The {openshift_cluster_console_url}[OpenShift Web Console^] tab will open in a new browser window.
+
+The username is `{openshift_cluster_admin_username}` and the password is `{openshift_cluster_admin_password}`
+====
+
 == Configure our Autopilot Rule
 
 === Task 1: Create a new VM for Autopilot
