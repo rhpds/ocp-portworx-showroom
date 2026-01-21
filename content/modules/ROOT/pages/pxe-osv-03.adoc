@@ -3,6 +3,15 @@
 In this scenario, we will learn how to provision a virtual machine
 on OpenShift Virtualization with Portworx.
 
+
+====
+[TIP]
+
+The {openshift_cluster_console_url}[OpenShift Web Console^] tab will open in a new browser window.
+
+The username is `{openshift_cluster_admin_username}` and the password is `{openshift_cluster_admin_password}`
+====
+
 == Step 1 - Modify our VM
 
 Let's modify our VM to help verify that our changes are retained during a live migration and HA event.
@@ -94,7 +103,7 @@ our virtual machine is running on:
 
 [source,sh,role=execute]
 ----
-NODENAME=$(oc get pods -o wide | grep 'Running' | awk '{print $7}' | head -n 1)
+NODENAME=$(oc get pods -o wide | grep stream9-example| grep 'Running' | awk '{print $7}' | head -n 1)
 
 echo "Your VM is running on node: ${NODENAME}"
 ----
@@ -132,7 +141,6 @@ It is possible that the `showroom` lab interface (where you are reading these in
 
 To speed up the re-creation of the pod you can also find the showroom pod in the showroom namespace and delete the currently running pod.
 ====
-nnh
 Let's watch our VM and pod status in the default namespace:
 
 [source,sh,role=execute]

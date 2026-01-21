@@ -96,7 +96,7 @@ Grab our StorageCluster specification:
 
 [source,sh,role=execute]
 ----
-curl -o $HOME/px-spec.yaml 'https://install.portworx.com/3.1.6?operator=true&mc=false&kbver=1.29.10&ns=portworx&b=true&iop=6&s=%22type%3Dgp3%2Csize%3D50%22%2C%22&ce=aws&r=17001&c=px-cluster-443e64d8-f2c7-47d2-b81b-295567465a84&osft=true&stork=true&csi=true&tel=false&st=k8s&mz=3'
+curl -o $HOME/px-spec.yaml 'https://install.portworx.com/3.4.0.1?operator=true&mc=false&kbver=1.29.10&ns=portworx&b=true&iop=6&s=%22type%3Dgp3%2Csize%3D50%22%2C%22&ce=aws&r=17001&c=px-cluster-443e64d8-f2c7-47d2-b81b-295567465a84&osft=true&stork=true&csi=true&tel=false&st=k8s&mz=3'
 ----
 
 Take a look at our current manifest by using the cat utility:
@@ -105,6 +105,8 @@ Take a look at our current manifest by using the cat utility:
 ----
 cat -n $HOME/px-spec.yaml
 ----
+
+The StorageCluster CR controls the configuration of the Portworx cluster. Some of the important lines are:
 
 * Line 9 tells Portworx that we are installing on an Openshift cluster
 * Line 11 contains the Portworx image we are using. Upgrading Portworx is as easy as changing this line.
@@ -256,9 +258,7 @@ metadata:
     storageclass.kubernetes.io/is-default-class: "true"
 parameters:
   repl: "3"
-  sharedv4: "true"
-  sharedv4_svc_type: "ClusterIP"
-  sharedv4_mount_options: vers=3.0,nolock
+  nodiscard: "true"
 provisioner: pxd.portworx.com
 reclaimPolicy: Delete
 volumeBindingMode: WaitForFirstConsumer
@@ -279,7 +279,7 @@ We also specified that the volumeBindingMode should be
 volume.
 
 See the
-https://docs.portworx.com/portworx-enterprise/3.1/platform/openshift/ocp-bare-metal/operations/storage-operations/manage-kubevirt-vms[Portworx Documentation^] for further details.
+https://docs.portworx.com/portworx-enterprise/3.4/platform/provision-storage/kubevirt-vms/manage-kubevirt-vms-rwx-block/openshift[Portworx Documentation^] for further details.
 
 Also note that the `provisioner` is set to `pxd.portworx.com`. This
 means that our storage class will be using CSI rather than the in-tree
@@ -326,101 +326,7 @@ It is also possible to install the Operator and HyperConverged object using the 
 the CLI to make the process more repeatable
 ====
 
-=== Patch the StorageProfile to default to RWX filesystem
-A recent change to the Containerized Data Importer (CDI) can cause issues when provisioning virtual machines with Portworx storage. 
-Specifically, the default `StorageProfile` associated with the Portworx StorageClass may not support the necessary access modes.
-
-The script locates all StorageClasses provisioned by Portworx, then updates their corresponding StorageProfiles to:
-
-* Set RWX + Filesystem as the preferred access mode
-* Include support for RWO with both Filesystem and Block volume modes
-* Use `csi-clone` as the default cloning strategy for improved compatibility with DataVolumes
-* Clean up existing PVCs, DataVolumes, and import cron jobs to avoid conflicts after the patch
-
-Paste in the  script to create the file `patch_storageprofiles.sh`
-
-[source,sh,role=execute]
-----
-cat <<EOF > patch_storageprofiles.sh
-#!/bin/bash
-
-set -euo pipefail
-
-NAMESPACE="openshift-virtualization-os-images"
-PROVISIONER="pxd.portworx.com"
-
-echo "Finding StorageClasses with provisioner '\${PROVISIONER}'..."
-
-STORAGE_CLASSES=\$(kubectl get storageclass -o json | jq -r \
-  --arg prov "\${PROVISIONER}" \
-  '.items[] | select(.provisioner == \$prov) | .metadata.name')
-
-if [[ -z "\${STORAGE_CLASSES}" ]]; then
-  echo "No matching StorageClasses found with provisioner \${PROVISIONER}"
-  exit 0
-fi
-
-# Save desired StorageProfile spec JSON to a temporary file
-SPEC_FILE=\$(mktemp)
-cat > "\${SPEC_FILE}" <<EOF_SPEC
-{
-  "claimPropertySets": [
-    {
-      "accessModes": ["ReadWriteMany"],
-      "volumeMode": "Filesystem"
-    },
-    {
-      "accessModes": ["ReadWriteOnce"],
-      "volumeMode": "Block"
-    },
-    {
-      "accessModes": ["ReadWriteOnce"],
-      "volumeMode": "Filesystem"
-    }
-  ],
-  "cloneStrategy": "csi-clone",
-  "dataImportCronSourceFormat": "pvc"
-}
-EOF_SPEC
-
-echo "Updating corresponding StorageProfiles..."
-
-for sc in \${STORAGE_CLASSES}; do
-  echo "Patching StorageProfile: \${sc}"
-  PATCH_FILE=\$(mktemp)
-
-  jq -n --slurpfile spec "\${SPEC_FILE}" \
-    '[{"op": "replace", "path": "/spec", "value": \$spec[0]}]' > "\${PATCH_FILE}"
-
-  if kubectl patch storageprofile "\${sc}" --type='json' -p "\$(cat "\${PATCH_FILE}")"; then
-    echo "Patched \${sc} successfully"
-  else
-    echo "Failed to patch \${sc} — continuing..."
-  fi
-
-  rm -f "\${PATCH_FILE}"
-done
-
-rm -f "\${SPEC_FILE}"
-
-echo "Cleaning up PVCs, DVs, and DataImportCrons in namespace: \${NAMESPACE}"
-
-kubectl delete pvc --all -n "\${NAMESPACE}" --ignore-not-found=true
-kubectl delete dv --all -n "\${NAMESPACE}" --ignore-not-found=true
-kubectl delete dataimportcron --all -n "\${NAMESPACE}" --ignore-not-found=true
-
-echo "Done!"
-EOF
-----
-
-Next, make the script executable and run the script.
-
-[source,sh,role=execute]
-----
-chmod +x patch_storageprofiles.sh && ./patch_storageprofiles.sh 
-----
-
-Let's check the PVCs for the vm images.  You should see the status as Bound and the Access MOde as RWX
+Let's check the PVCs for the vm images.  You should see the status as Bound and the Access Mode as RWX
 
 [source,sh,role=execute]
 ----
@@ -429,12 +335,13 @@ oc get pvc -n openshift-virtualization-os-images
 
 [source,sh,role=execute]
 ----
-NAME                          STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
-centos-stream9-e065d9079064   Bound    pvc-cbfe2447-6a3d-4eea-ada5-143a33960d2b   33Gi       RWX            px-csi-vm      <unset>                 5m52s
-fedora-4fcda30051d5           Bound    pvc-4d1efdcc-fec3-47e5-9f98-4ad233ae0f51   33Gi       RWX            px-csi-vm      <unset>                 5m52s
-rhel10-beta-da1c0cdc24da      Bound    pvc-f484971c-10ce-4036-82a5-cb2c656c43e6   33Gi       RWX            px-csi-vm      <unset>                 5m51s
-rhel8-833d0f124287            Bound    pvc-a36b7e73-6f67-43a7-b0b7-bff135f4ce0f   33Gi       RWX            px-csi-vm      <unset>                 5m51s
-rhel9-0c9204ba64c2            Bound    pvc-0879b51d-708c-4b37-9483-ae667e047954   33Gi       RWX            px-csi-vm      <unset>                 5m51s
+NAME                          STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS            AGE
+centos-stream10-1983db89651a   Bound    pvc-456a4e64-de3c-4197-bed1-b9e228c492fd   30Gi       RWX            px-rwx-block-kubevirt   <unset>                 21m
+centos-stream9-27092766a264    Bound    pvc-ea4e2f73-06c5-4e4f-a15d-60690c70ca2e   30Gi       RWX            px-rwx-block-kubevirt   <unset>                 21m
+fedora-b37907f3bbf8            Bound    pvc-ba0f44a9-7741-4607-89be-1ee68be04d4e   30Gi       RWX            px-rwx-block-kubevirt   <unset>                 21m
+rhel10-c03936a065f2            Bound    pvc-4b4eaf2f-a841-49b4-be8f-94c52ce5a0f3   30Gi       RWX            px-rwx-block-kubevirt   <unset>                 21m
+rhel8-4ccd8b6aee47             Bound    pvc-c4e47d73-1d38-4d7d-b609-24a6ab88f25e   30Gi       RWX            px-rwx-block-kubevirt   <unset>                 21m
+rhel9-ab4ec16077fe             Bound    pvc-d79b1530-062a-4176-8cdb-89dfe89297be   30Gi       RWX            px-rwx-block-kubevirt   <unset>                 21m
 ----
 
 === Task: Install Virtctl
@@ -470,10 +377,10 @@ oc get storageprofile px-csi-vm -o yaml
 ----
 
 We can see under the `.status` node a list of access modes. The first
-access mode: RWX in filesystem mode will be preferred.
+access mode: RWX in block mode will be preferred.
 
 For further details on storage clusters, see the
-https://docs.openshift.com/container-platform/4.16/virt/storage/virt-configuring-storage-profile.html[Openshift
+https://docs.openshift.com/container-platform/4.18/virt/storage/virt-configuring-storage-profile.html[Openshift
 documentation^].
 
 

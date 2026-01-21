@@ -3,6 +3,15 @@
 In this scenario, we will learn about how to provision a virtual machine
 on OpenShift Virtualization with Pure Storage.
 
+
+====
+[TIP]
+
+The {openshift_cluster_console_url}[OpenShift Web Console^] tab will open in a new browser window.
+
+The username is `{openshift_cluster_admin_username}` and the password is `{openshift_cluster_admin_password}`
+====
+
 == Step 1 - Deploy a virtual machine using the OpenShift command line tool
 
 Let's start by building a VM using the `oc` command line tool.
@@ -92,8 +101,9 @@ We can check the status of the VM running this command.
 
 [source,sh,role=execute]
 ----
-watch oc get vms
+watch oc get vms,dv
 ----
+Provision will take a couple of minutes.
 
 Once the VM is running, ctrl-c to exit.  We can then log into this VM using this command (if you do so make sure to exit again by pressing `Ctrl-D` or typing `exit` and pressing `Enter`):
 
