@@ -1,6 +1,6 @@
 ---
 site:
-  title: Using Portworx with OpenShift Virtualization
+  title: "LB1127: Unifying VMs and Containers on Red Hat OpenShift with Portworx"
   start_page: modules::index.adoc
 
 content:
@@ -10,22 +10,18 @@ content:
 
 ui:
   bundle:
-    url: https://github.com/rhpds/rhdp_showroom_theme/releases/download/rh-summit-2025/ui-bundle.zip
-    snapshot: true
+    url: https://github.com/rhpds/rhdp_showroom_theme/releases/download/rh-one-2025/ui-bundle.zip
+    # url: https://github.com/rhpds/rhdp_showroom_theme/releases/download/patternfly-6/ui-bundle.zip
   supplemental_files:
     - path: ./content/supplemental-ui
-    - path: ./content/lib
-    - path: .nojekyll
-    - path: ui.yml
-      contents: "static_files: [ .nojekyll ]"
 
-runtime:
-  cache_dir: ./.cache/antora
+antora:
+  extensions:
+  - '@sntke/antora-mermaid-extension'
 
-# antora:
-#   extensions:
-#     - require: ./content/lib/dev-mode.js
-#       enabled: true
+asciidoc:
+  attributes:
+    showroom-collection-version: v1.5.5
 
 output:
   dir: ./www
