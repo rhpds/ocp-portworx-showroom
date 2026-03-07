@@ -13,6 +13,6 @@ view_switcher:
 tabs:
 - name: OpenShift Console
   url: 'https://console-openshift-console.${DOMAIN}'
-- name: Bastion
+- name: Terminal
   path: /wetty
   port: 443
