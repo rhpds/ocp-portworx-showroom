@@ -20,7 +20,7 @@ Let's write some data to a file:
 
 [source,sh,role=execute]
 ----
-virtctl ssh cloud-user@centos-stream9-example \
+virtctl ssh cloud-user@vm/centos-stream9-example/vmtest \
   -i ~/.ssh/id_rsa \
   -t "-o StrictHostKeyChecking=no" \
   -c 'echo "Red Hat was here" > ~/text'
@@ -30,7 +30,7 @@ We can read our file at any time by running:
 
 [source,sh,role=execute]
 ----
-virtctl ssh cloud-user@centos-stream9-example \
+virtctl ssh cloud-user@vm/centos-stream9-example/vmtest \
   -i ~/.ssh/id_rsa \
   -t "-o StrictHostKeyChecking=no" \
   -c 'cat ~/text'
@@ -55,7 +55,7 @@ the node where our VM is running.
 image:livemigrate-vm-01.png[get ocp node]
 
 We can now migrate the VM to a new node by selecting the `Actions` menu,
-and clicking `Migrate`
+and clicking `Migrate` and leaving `Automatically Select Node`
 
 image:livemigrate-vm-02.png[migrate vm]
 
@@ -68,7 +68,7 @@ We can view the running pods by executing:
 
 [source,sh,role=execute]
 ----
-oc get pods -o wide
+oc get pods -o wide -n vmtest
 ----
 
 Notice that one of the pods is in the `Completed` state because the virtual machine process has moved to another pod.
@@ -77,14 +77,14 @@ We can view the running VMs by typing:
 
 [source,sh,role=execute]
 ----
-oc get vms
+oc get vms -n vmtest
 ----
 
 Let's check to make sure our data is still there:
 
 [source,sh,role=execute]
 ----
-virtctl ssh cloud-user@centos-stream9-example \
+virtctl ssh cloud-user@vm/centos-stream9-example/vmtest \
   -i ~/.ssh/id_rsa \
   -t "-o StrictHostKeyChecking=no" \
   -c 'cat ~/text'
@@ -103,7 +103,7 @@ our virtual machine is running on:
 
 [source,sh,role=execute]
 ----
-NODENAME=$(oc get pods -o wide | grep stream9-example| grep 'Running' | awk '{print $7}' | head -n 1)
+NODENAME=$(oc get pods -o wide -n vmtest | grep stream9-example| grep 'Running' | awk '{print $7}' | head -n 1)
 
 echo "Your VM is running on node: ${NODENAME}"
 ----
@@ -141,11 +141,11 @@ It is possible that the `showroom` lab interface (where you are reading these in
 
 To speed up the re-creation of the pod you can also find the showroom pod in the showroom namespace and delete the currently running pod.
 ====
-Let's watch our VM and pod status in the default namespace:
+Let's watch our VM and pod status in the vmtest namespace:
 
 [source,sh,role=execute]
 ----
-watch oc get pods,vms -o wide
+watch oc get pods,vms -o wide -n vmtest
 ----
 
 Take note of the NODE column. We will see a new launcher pod start on a
@@ -158,7 +158,7 @@ Let's check to make sure our data is still there:
 
 [source,sh,role=execute]
 ----
-virtctl ssh cloud-user@centos-stream9-example \
+virtctl ssh cloud-user@vm/centos-stream9-example/vmtest \
   -i ~/.ssh/id_rsa \
   -t "-o StrictHostKeyChecking=no" \
   -c 'cat ~/text'
