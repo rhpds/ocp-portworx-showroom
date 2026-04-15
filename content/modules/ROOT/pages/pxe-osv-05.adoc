@@ -260,4 +260,21 @@ Notice the size of the data disk mounted at `/data`
 
 You've just configured Portworx Autopilot and observed how it can perform automated capacity management based on rules you configure, and be able to ``right-size'' your underlying persistent storage as it is needed!
 
+== Lab Complete
+
+Congratulations on completing the Portworx Enterprise with OpenShift Virtualization lab!
+
+Throughout this lab you have:
+
+* Installed and configured **Portworx Enterprise** on an OpenShift cluster
+* Provisioned **virtual machines** backed by Portworx persistent storage
+* Performed **live migrations** and validated high availability across node failures
+* Used **Portworx snapshots** to protect and restore a virtual machine
+* Leveraged **Portworx Autopilot** to automatically expand storage capacity in response to real demand — with zero downtime and no manual intervention
+
+Portworx Enterprise provides a powerful, enterprise-grade storage foundation for OpenShift Virtualization workloads, ensuring your virtual machines are resilient, portable, and efficiently managed at scale.
+
+We hope you found this lab valuable. For further reading, visit the https://docs.portworx.com[Portworx documentation^] and the https://docs.openshift.com/container-platform/latest/virt/about_virt/about-virt.html[OpenShift Virtualization documentation^].
+
+---
 
