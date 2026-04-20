@@ -37,12 +37,19 @@
       ignore_errors: true
 
     # -------------------------------------------------------
-    # Check 3 — Live migration occurred (Completed virt-launcher pod exists)
-    # After a live migration the source virt-launcher pod is left in
-    # Succeeded phase — this is the durable evidence.
-    # Note: the student must perform migration (Step 2) before the HA reboot
-    # (Step 3), so the Succeeded pod persists even after the reboot.
+    # Check 3 — Live migration occurred
+    # Evidence: VMIM resource with Succeeded phase, OR a non-Running
+    # virt-launcher pod (Succeeded/Failed) left after migration.
     # -------------------------------------------------------
+    - name: Get VirtualMachineInstanceMigration resources
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: kubevirt.io/v1
+        kind: VirtualMachineInstanceMigration
+        namespace: "{{ vm_namespace }}"
+      register: r_vmim
+      ignore_errors: true
+
     - name: Get all virt-launcher pods in vmtest (including Completed)
       kubernetes.core.k8s_info:
         kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
@@ -88,6 +95,11 @@
           }}
         _task3_ok: >-
           {{
+            (r_vmim.resources | default([])
+             | selectattr('status.phase', 'defined')
+             | selectattr('status.phase', 'equalto', 'Succeeded')
+             | list | length > 0)
+            or
             (r_launcher_pods.resources | default([])
              | selectattr('status.phase', 'equalto', 'Succeeded')
              | list | length > 0)
@@ -113,7 +125,7 @@
         pass_msg: |
           Task 1: PVC has ReadWriteMany access mode (Portworx shared volume confirmed)
           Task 2: VM centos-stream9-example is Running
-          Task 3: Live migration occurred (non-Running virt-launcher pod found as evidence)
+          Task 3: Live migration occurred (VMIM Succeeded or non-Running virt-launcher pod found)
           Task 4: ~/text contains "Red Hat was here" (data persisted through migration and HA)
         error_msg: |
           {{ '[OK]' if _task1_ok else '[FAILED]' }} Task 1: PVC ReadWriteMany — \
@@ -121,6 +133,6 @@
           {{ '[OK]' if _task2_ok else '[FAILED]' }} Task 2: VM Running — \
           {{ 'confirmed' if _task2_ok else 'VM is not Running — run: oc get vm -n vmtest and wait for recovery after the HA reboot' }}
           {{ '[OK]' if _task3_ok else '[FAILED]' }} Task 3: Live migration evidence — \
-          {{ 'found (prior virt-launcher pod exists)' if _task3_ok else 'no prior virt-launcher pod found — complete the live migration via Actions > Migrate in the console before triggering the HA reboot' }}
+          {{ 'migration evidence found' if _task3_ok else 'no migration evidence — complete the live migration via Actions > Migrate in the console' }}
           {{ '[OK]' if _task4_ok else '[FAILED]' }} Task 4: ~/text content — \
           {{ '"Red Hat was here" confirmed' if _task4_ok else 'file missing or wrong content — run Step 1 to write the file; if the VM rebooted after the HA event re-run Solve to restore it' }}
