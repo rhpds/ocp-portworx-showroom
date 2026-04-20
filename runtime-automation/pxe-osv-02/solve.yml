@@ -37,6 +37,19 @@
         ssh_pubkey_b64: "{{ r_pubkey.content }}"
 
     # ------------------------------------------------------------------
+    # Copy SSH private key to bastion host so virtctl ssh works
+    # ------------------------------------------------------------------
+    - name: Copy SSH private key to bastion
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh
+        -o StrictHostKeyChecking=no
+        {{ bastion_user }}@{{ bastion_host }}
+        "mkdir -p ~/.ssh && cat > ~/.ssh/id_rsa && chmod 600 ~/.ssh/id_rsa"
+        < /tmp/solve_id_rsa
+      changed_when: true
+      ignore_errors: true
+
+    # ------------------------------------------------------------------
     # block-02: Create vmtest namespace
     # ------------------------------------------------------------------
     - name: Create vmtest namespace
