@@ -12,20 +12,63 @@
 
   tasks:
     # ------------------------------------------------------------------
-    # block-01: Generate SSH keypair
-    # Generate a fresh RSA keypair in the runner container and capture
-    # the public key as a fact for use in the Secret below.
+    # block-01: SSH keypair management
+    # Priority: reuse bastion key > reuse runner key > generate new key.
+    # After pod restarts the runner loses /tmp/solve_id_rsa* but the
+    # bastion retains ~/.ssh/id_rsa — copy it back to the runner so the
+    # authorized-keys secret stays in sync with the VM.
     # ------------------------------------------------------------------
+    - name: Check if SSH key exists on bastion
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh
+        -o StrictHostKeyChecking=no
+        {{ bastion_user }}@{{ bastion_host }}
+        "test -f ~/.ssh/id_rsa && echo BASTION_KEY_EXISTS"
+      register: r_bastion_key_check
+      changed_when: false
+      failed_when: false
+
+    - name: Set bastion key exists fact
+      ansible.builtin.set_fact:
+        bastion_has_key: >-
+          {{ r_bastion_key_check.rc == 0 and
+             'BASTION_KEY_EXISTS' in (r_bastion_key_check.stdout | default('')) }}
+
     - name: Check if SSH key already exists in runner
       ansible.builtin.stat:
-        path: /tmp/solve_id_rsa.pub
+        path: /tmp/solve_id_rsa
       register: r_ssh_key_stat
 
-    - name: Generate SSH keypair in runner
+    - name: Copy bastion private key to runner
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh
+        -o StrictHostKeyChecking=no
+        {{ bastion_user }}@{{ bastion_host }}
+        "cat ~/.ssh/id_rsa" > /tmp/solve_id_rsa
+        && chmod 600 /tmp/solve_id_rsa
+      when:
+        - bastion_has_key | bool
+        - not r_ssh_key_stat.stat.exists
+      changed_when: true
+
+    - name: Copy bastion public key to runner
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh
+        -o StrictHostKeyChecking=no
+        {{ bastion_user }}@{{ bastion_host }}
+        "cat ~/.ssh/id_rsa.pub" > /tmp/solve_id_rsa.pub
+      when:
+        - bastion_has_key | bool
+        - not r_ssh_key_stat.stat.exists
+      changed_when: true
+
+    - name: Generate SSH keypair in runner (no key exists anywhere)
       ansible.builtin.command: ssh-keygen -t rsa -b 4096 -f /tmp/solve_id_rsa -N ""
-      when: not r_ssh_key_stat.stat.exists
+      when:
+        - not (bastion_has_key | bool)
+        - not r_ssh_key_stat.stat.exists
       register: r_ssh_keygen
-      changed_when: r_ssh_keygen.rc == 0
+      changed_when: r_ssh_keygen.rc | default(1) == 0
 
     - name: Read SSH public key
       ansible.builtin.slurp:
@@ -37,7 +80,7 @@
         ssh_pubkey_b64: "{{ r_pubkey.content }}"
 
     # ------------------------------------------------------------------
-    # Copy SSH private key to bastion host so virtctl ssh works
+    # Copy SSH keys to bastion when we generated a new pair
     # ------------------------------------------------------------------
     - name: Copy SSH private key to bastion
       ansible.builtin.shell: >-
@@ -46,6 +89,17 @@
         {{ bastion_user }}@{{ bastion_host }}
         "mkdir -p ~/.ssh && cat > ~/.ssh/id_rsa && chmod 600 ~/.ssh/id_rsa"
         < /tmp/solve_id_rsa
+      when: not (bastion_has_key | bool)
+      changed_when: true
+      ignore_errors: true
+
+    - name: Copy SSH public key to bastion
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh
+        -o StrictHostKeyChecking=no
+        {{ bastion_user }}@{{ bastion_host }}
+        "cat > ~/.ssh/id_rsa.pub" < /tmp/solve_id_rsa.pub
+      when: not (bastion_has_key | bool)
       changed_when: true
       ignore_errors: true
 
