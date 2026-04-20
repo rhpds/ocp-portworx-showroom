@@ -51,12 +51,12 @@
         - not r_ssh_key_stat.stat.exists
       changed_when: true
 
-    - name: Copy bastion public key to runner
+    - name: Derive public key from bastion private key and copy to runner
       ansible.builtin.shell: >-
         sshpass -p '{{ bastion_password }}' ssh
         -o StrictHostKeyChecking=no
         {{ bastion_user }}@{{ bastion_host }}
-        "cat ~/.ssh/id_rsa.pub" > /tmp/solve_id_rsa.pub
+        "ssh-keygen -y -f ~/.ssh/id_rsa" > /tmp/solve_id_rsa.pub
       when:
         - bastion_has_key | bool
         - not r_ssh_key_stat.stat.exists
@@ -93,13 +93,12 @@
       changed_when: true
       ignore_errors: true
 
-    - name: Copy SSH public key to bastion
+    - name: Save public key to bastion
       ansible.builtin.shell: >-
         sshpass -p '{{ bastion_password }}' ssh
         -o StrictHostKeyChecking=no
         {{ bastion_user }}@{{ bastion_host }}
-        "cat > ~/.ssh/id_rsa.pub" < /tmp/solve_id_rsa.pub
-      when: not (bastion_has_key | bool)
+        "ssh-keygen -y -f ~/.ssh/id_rsa > ~/.ssh/id_rsa.pub"
       changed_when: true
       ignore_errors: true
 
