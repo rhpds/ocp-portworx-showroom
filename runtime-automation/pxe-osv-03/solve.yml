@@ -20,9 +20,9 @@
       kubernetes.core.k8s_info:
         kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
         kind: Pod
-        namespace: showroom
+        namespace: "showroom-{{ guid }}"
         label_selectors:
-          - "app=wetty"
+          - "app.kubernetes.io/name=showroom"
       register: r_bastion_pod
       ignore_errors: true
 
@@ -42,8 +42,9 @@
     - name: Write 'Red Hat was here' to ~/text inside VM (via bastion)
       kubernetes.core.k8s_exec:
         kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: showroom
+        namespace: "showroom-{{ guid }}"
         pod: "{{ bastion_pod }}"
+        container: wetty
         command: >-
           sh -c 'virtctl ssh cloud-user@vm/{{ vm_name }}/{{ vm_namespace }}
           -i {{ ssh_key_path }}
@@ -56,8 +57,9 @@
     - name: Verify text file written to VM
       kubernetes.core.k8s_exec:
         kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: showroom
+        namespace: "showroom-{{ guid }}"
         pod: "{{ bastion_pod }}"
+        container: wetty
         command: >-
           sh -c 'virtctl ssh cloud-user@vm/{{ vm_name }}/{{ vm_namespace }}
           -i {{ ssh_key_path }}
@@ -162,8 +164,9 @@
     - name: Verify text file persists after live migration (via bastion)
       kubernetes.core.k8s_exec:
         kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: showroom
+        namespace: "showroom-{{ guid }}"
         pod: "{{ bastion_pod }}"
+        container: wetty
         command: >-
           sh -c 'virtctl ssh cloud-user@vm/{{ vm_name }}/{{ vm_namespace }}
           -i {{ ssh_key_path }}
@@ -212,8 +215,9 @@
         WARNING - Reboot worker node hosting VM (intentionally destructive HA test)
       kubernetes.core.k8s_exec:
         kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: showroom
+        namespace: "showroom-{{ guid }}"
         pod: "{{ bastion_pod }}"
+        container: wetty
         command: >-
           sh -c 'oc debug node/{{ vm_node }}
           --to-namespace={{ vm_namespace }}
@@ -254,9 +258,9 @@
       kubernetes.core.k8s_info:
         kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
         kind: Pod
-        namespace: showroom
+        namespace: "showroom-{{ guid }}"
         label_selectors:
-          - "app=wetty"
+          - "app.kubernetes.io/name=showroom"
       register: r_bastion_pod_refresh
       until: >-
         r_bastion_pod_refresh.resources | default([])
@@ -286,8 +290,9 @@
     - name: Verify text file persists after HA node reboot (via bastion)
       kubernetes.core.k8s_exec:
         kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: showroom
+        namespace: "showroom-{{ guid }}"
         pod: "{{ bastion_pod }}"
+        container: wetty
         command: >-
           sh -c 'virtctl ssh cloud-user@vm/{{ vm_name }}/{{ vm_namespace }}
           -i {{ ssh_key_path }}

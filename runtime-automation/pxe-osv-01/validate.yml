@@ -6,7 +6,7 @@
   vars:
     student_user: "{{ user | default('') }}"
     portworx_namespace: portworx
-    portworx_csv: portworx-operator.v25.6.1
+    portworx_csv: portworx-operator.v26.1.0
     cnv_namespace: openshift-cnv
 
   tasks:
@@ -155,28 +155,29 @@
     # -------------------------------------------------------
     # Check 12 - virtctl binary exists on bastion (via wetty pod exec)
     # -------------------------------------------------------
-    - name: Find wetty pod for bastion shell access
+    - name: Find showroom pod for bastion shell access
       kubernetes.core.k8s_info:
         kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
         kind: Pod
-        namespace: showroom
+        namespace: "showroom-{{ guid }}"
         label_selectors:
-          - app=wetty
+          - app.kubernetes.io/name=showroom
       register: r_wetty_pods
       ignore_errors: true
 
-    - name: Set wetty pod name
+    - name: Set showroom pod name
       ansible.builtin.set_fact:
         wetty_pod: >-
           {{ (r_wetty_pods.resources | default([]) |
           selectattr('status.phase', 'equalto', 'Running') |
           list | first).metadata.name | default('') }}
 
-    - name: Check virtctl binary on bastion via wetty pod
+    - name: Check virtctl binary on bastion via showroom pod
       kubernetes.core.k8s_exec:
         kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: showroom
+        namespace: "showroom-{{ guid }}"
         pod: "{{ wetty_pod }}"
+        container: wetty
         command: >-
           ssh -o StrictHostKeyChecking=no lab-user@localhost
           "test -f /usr/local/bin/virtctl && echo exists || echo missing"

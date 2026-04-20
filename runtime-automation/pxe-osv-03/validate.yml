@@ -62,9 +62,9 @@
       kubernetes.core.k8s_info:
         kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
         kind: Pod
-        namespace: showroom
+        namespace: "showroom-{{ guid }}"
         label_selectors:
-          - "app=wetty"
+          - "app.kubernetes.io/name=showroom"
       register: r_bastion_pod
       ignore_errors: true
 
@@ -84,8 +84,9 @@
     - name: Read ~/text from VM via bastion (virtctl ssh)
       kubernetes.core.k8s_exec:
         kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: showroom
+        namespace: "showroom-{{ guid }}"
         pod: "{{ bastion_pod }}"
+        container: wetty
         command: >-
           sh -c 'virtctl ssh cloud-user@vm/{{ vm_name }}/{{ vm_namespace }}
           -i {{ ssh_key_path }}

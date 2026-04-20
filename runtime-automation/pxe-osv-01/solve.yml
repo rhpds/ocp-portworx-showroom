@@ -5,7 +5,7 @@
   gather_facts: false
   vars:
     portworx_namespace: portworx
-    portworx_csv: portworx-operator.v25.6.1
+    portworx_csv: portworx-operator.v26.1.0
     portworx_channel: stable
     portworx_spec_url: >-
       https://install.portworx.com/3.6.0?operator=true&mc=false&kbver=1.33.9&ns=portworx&b=true&iop=6&s=%22type%3Dgp3%2Csize%3D50%22%2C%22&ce=aws&r=17001&c=px-cluster-443e64d8-f2c7-47d2-b81b-295567465a84&osft=true&stork=true&csi=true&tel=false&st=k8s&mz=3
@@ -83,11 +83,11 @@
           apiVersion: operators.coreos.com/v1alpha1
           kind: Subscription
           metadata:
-            name: portworx-enterprise
+            name: portworx-certified
             namespace: "{{ portworx_namespace }}"
           spec:
             channel: "{{ portworx_channel }}"
-            name: portworx-enterprise
+            name: portworx-certified
             source: certified-operators
             sourceNamespace: openshift-marketplace
             installPlanApproval: Manual
@@ -323,17 +323,17 @@
     # ---------------------------------------------------------------
     # block-19: Install virtctl on bastion via wetty pod exec
     # ---------------------------------------------------------------
-    - name: Find wetty pod for bastion shell access
+    - name: Find showroom pod for bastion shell access
       kubernetes.core.k8s_info:
         kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
         kind: Pod
-        namespace: showroom
+        namespace: "showroom-{{ guid }}"
         label_selectors:
-          - app=wetty
+          - app.kubernetes.io/name=showroom
       register: r_wetty_pods
       ignore_errors: true
 
-    - name: Set wetty pod name
+    - name: Set showroom pod name
       ansible.builtin.set_fact:
         wetty_pod: >-
           {{ (r_wetty_pods.resources | default([]) |
@@ -344,11 +344,12 @@
         selectattr('status.phase', 'equalto', 'Running') |
         list | length > 0
 
-    - name: Install virtctl on bastion via wetty pod
+    - name: Install virtctl on bastion via showroom pod
       kubernetes.core.k8s_exec:
         kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: showroom
+        namespace: "showroom-{{ guid }}"
         pod: "{{ wetty_pod }}"
+        container: wetty
         command: >-
           ssh -o StrictHostKeyChecking=no lab-user@localhost
           "VIRTCTL_URL=$(oc get consoleclidownload virtctl-clidownloads-kubevirt-hyperconverged
