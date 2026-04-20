@@ -2,26 +2,28 @@
 
 In this scenario, we will install Portworx Enterprise on an existing OpenShift cluster and create a new default StorageClass for virtual machines.
 
+=== Reminder: Accessing the OpenShift Console
+
+You can access both the terminal and the OpenShift console in tabs to the right.
+
+====
+[TIP]
+
+If you would like a seperate window clicking {openshift_cluster_console_url}[OpenShift Web Console^] open the OpenShift Console in a new tab window.
+
+The username is `{openshift_cluster_admin_username}` and the password is `{openshift_cluster_admin_password}`
+====
+
 === Creating our project
 
 For this lab, we will be using a new project. In the terminal window execute the following command to create a new project.
+
+Make sure you are in the terminal tab to your right.
 
 [source,sh,role=execute]
 ----
 oc new-project vmtest
 ----
-
-=== Reminder: Accessing the OpenShift Console
-
-You can connect to the terminal in the windows to the right.
-
-====
-[TIP]
-
-The {openshift_cluster_console_url}[OpenShift Web Console^] tab will open in a new browser window.
-
-The username is `{openshift_cluster_admin_username}` and the password is `{openshift_cluster_admin_password}`
-====
 
 === Task: Exploring the CLI
 

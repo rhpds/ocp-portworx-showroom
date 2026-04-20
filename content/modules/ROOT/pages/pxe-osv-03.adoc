@@ -3,11 +3,14 @@
 In this scenario, we will learn how to provision a virtual machine
 on OpenShift Virtualization with Portworx.
 
+=== Reminder: Accessing the OpenShift Console
+
+You can access both the terminal and the OpenShift console in tabs to the right.
 
 ====
 [TIP]
 
-The {openshift_cluster_console_url}[OpenShift Web Console^] tab will open in a new browser window.
+If you would like a seperate window clicking {openshift_cluster_console_url}[OpenShift Web Console^] open the OpenShift Console in a new tab window.
 
 The username is `{openshift_cluster_admin_username}` and the password is `{openshift_cluster_admin_password}`
 ====
