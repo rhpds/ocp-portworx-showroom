@@ -1,0 +1,298 @@
+---
+- name: pxe-osv-01 Validation - Install Portworx and Configure Storage
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    student_user: "{{ user | default('') }}"
+    portworx_namespace: portworx
+    portworx_csv: portworx-operator.v25.6.1
+    cnv_namespace: openshift-cnv
+
+  tasks:
+
+    # -------------------------------------------------------
+    # Check 1 - vmtest namespace exists
+    # -------------------------------------------------------
+    - name: Get vmtest namespace
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        kind: Namespace
+        name: vmtest
+      register: r_vmtest_ns
+      ignore_errors: true
+
+    # -------------------------------------------------------
+    # Check 2 - User workload monitoring enabled
+    # -------------------------------------------------------
+    - name: Get cluster-monitoring-config ConfigMap
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        kind: ConfigMap
+        name: cluster-monitoring-config
+        namespace: openshift-monitoring
+      register: r_monitoring_cm
+      ignore_errors: true
+
+    # -------------------------------------------------------
+    # Check 3 - Portworx operator CSV phase=Succeeded
+    # -------------------------------------------------------
+    - name: Get Portworx CSV
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        name: "{{ portworx_csv }}"
+        namespace: "{{ portworx_namespace }}"
+      register: r_csv
+      ignore_errors: true
+
+    # -------------------------------------------------------
+    # Check 4 - Console CR includes portworx-console-plugin
+    # -------------------------------------------------------
+    - name: Get Console CR
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: operator.openshift.io/v1
+        kind: Console
+        name: cluster
+      register: r_console
+      ignore_errors: true
+
+    # -------------------------------------------------------
+    # Check 5 - StorageCluster CR exists in portworx namespace
+    # -------------------------------------------------------
+    - name: Get Portworx StorageCluster
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: core.libopenstorage.org/v1
+        kind: StorageCluster
+        namespace: "{{ portworx_namespace }}"
+      register: r_storagecluster
+      ignore_errors: true
+
+    # -------------------------------------------------------
+    # Check 6 - At least 3 Portworx pods Running
+    # -------------------------------------------------------
+    - name: Get Portworx pods
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        kind: Pod
+        namespace: "{{ portworx_namespace }}"
+        label_selectors:
+          - name=portworx
+      register: r_px_pods
+      ignore_errors: true
+
+    # -------------------------------------------------------
+    # Check 7 - pxctl status reports PX is operational
+    # -------------------------------------------------------
+    - name: Find a running Portworx pod for pxctl check
+      ansible.builtin.set_fact:
+        px_pod: >-
+          {{ (r_px_pods.resources | default([]) |
+          selectattr('status.phase', 'equalto', 'Running') |
+          list | first).metadata.name | default('') }}
+
+    - name: Run pxctl status in Portworx pod
+      kubernetes.core.k8s_exec:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        namespace: "{{ portworx_namespace }}"
+        pod: "{{ px_pod }}"
+        command: "sh -c '/opt/pwx/bin/pxctl status 2>&1 | head -5'"
+      register: r_pxctl
+      when: px_pod | length > 0
+      ignore_errors: true
+
+    # -------------------------------------------------------
+    # Check 8 - gp3-csi is-default-class annotation is false
+    # -------------------------------------------------------
+    - name: Get gp3-csi StorageClass
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: gp3-csi
+      register: r_gp3_sc
+      ignore_errors: true
+
+    # -------------------------------------------------------
+    # Check 9 - px-csi-vm StorageClass exists and is default
+    # -------------------------------------------------------
+    - name: Get px-csi-vm StorageClass
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: px-csi-vm
+      register: r_pxvm_sc
+      ignore_errors: true
+
+    # -------------------------------------------------------
+    # Check 10 - HyperConverged CR Available=True
+    # -------------------------------------------------------
+    - name: Get HyperConverged CR
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: hco.kubevirt.io/v1beta1
+        kind: HyperConverged
+        name: kubevirt-hyperconverged
+        namespace: "{{ cnv_namespace }}"
+      register: r_hco
+      ignore_errors: true
+
+    # -------------------------------------------------------
+    # Check 11 - At least 6 OS image PVCs Bound
+    # -------------------------------------------------------
+    - name: Get OS image PVCs
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        kind: PersistentVolumeClaim
+        namespace: openshift-virtualization-os-images
+      register: r_os_pvcs
+      ignore_errors: true
+
+    # -------------------------------------------------------
+    # Check 12 - virtctl binary exists on bastion (via wetty pod exec)
+    # -------------------------------------------------------
+    - name: Find wetty pod for bastion shell access
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        kind: Pod
+        namespace: showroom
+        label_selectors:
+          - app=wetty
+      register: r_wetty_pods
+      ignore_errors: true
+
+    - name: Set wetty pod name
+      ansible.builtin.set_fact:
+        wetty_pod: >-
+          {{ (r_wetty_pods.resources | default([]) |
+          selectattr('status.phase', 'equalto', 'Running') |
+          list | first).metadata.name | default('') }}
+
+    - name: Check virtctl binary on bastion via wetty pod
+      kubernetes.core.k8s_exec:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        namespace: showroom
+        pod: "{{ wetty_pod }}"
+        command: >-
+          ssh -o StrictHostKeyChecking=no lab-user@localhost
+          "test -f /usr/local/bin/virtctl && echo exists || echo missing"
+      register: r_virtctl
+      when: wetty_pod | length > 0
+      ignore_errors: true
+
+    # -------------------------------------------------------
+    # Build result facts
+    # -------------------------------------------------------
+    - name: Build task results
+      ansible.builtin.set_fact:
+        _task01_ok: "{{ r_vmtest_ns.resources | default([]) | length > 0 }}"
+        _task02_ok: >-
+          {{
+            r_monitoring_cm.resources | default([]) | length > 0 and
+            'enableUserWorkload: true' in (
+              r_monitoring_cm.resources[0].data['config.yaml'] | default('')
+            )
+          }}
+        _task03_ok: >-
+          {{
+            r_csv.resources | default([]) | length > 0 and
+            (r_csv.resources[0].status.phase | default('')) == 'Succeeded'
+          }}
+        _task04_ok: >-
+          {{
+            r_console.resources | default([]) | length > 0 and
+            'portworx-console-plugin' in (
+              r_console.resources[0].spec.plugins | default([])
+            )
+          }}
+        _task05_ok: "{{ r_storagecluster.resources | default([]) | length > 0 }}"
+        _task06_ok: >-
+          {{
+            r_px_pods.resources | default([]) |
+            selectattr('status.phase', 'equalto', 'Running') |
+            list | length >= 3
+          }}
+        _task07_ok: >-
+          {{
+            r_pxctl is defined and
+            r_pxctl is not skipped and
+            r_pxctl is not failed and
+            'operational' in (r_pxctl.stdout | default('') | lower)
+          }}
+        _task08_ok: >-
+          {{
+            r_gp3_sc.resources | default([]) | length > 0 and
+            (r_gp3_sc.resources[0].metadata.annotations[
+              'storageclass.kubernetes.io/is-default-class'
+            ] | default('true')) == 'false'
+          }}
+        _task09_ok: >-
+          {{
+            r_pxvm_sc.resources | default([]) | length > 0 and
+            (r_pxvm_sc.resources[0].metadata.annotations[
+              'storageclass.kubernetes.io/is-default-class'
+            ] | default('false')) == 'true'
+          }}
+        _task10_ok: >-
+          {{
+            r_hco.resources | default([]) | length > 0 and
+            (r_hco.resources[0].status.conditions | default([]) |
+              selectattr('type', 'equalto', 'Available') |
+              selectattr('status', 'equalto', 'True') |
+              list | length) > 0
+          }}
+        _task11_ok: >-
+          {{
+            r_os_pvcs.resources | default([]) |
+            selectattr('status.phase', 'equalto', 'Bound') |
+            list | length >= 6
+          }}
+        _task12_ok: >-
+          {{
+            r_virtctl is defined and
+            r_virtctl is not skipped and
+            r_virtctl is not failed and
+            'exists' in (r_virtctl.stdout | default(''))
+          }}
+
+    # -------------------------------------------------------
+    # Validate all tasks
+    # -------------------------------------------------------
+    - name: Validate all tasks
+      rhpds.ftl.validation_check:
+        check: >-
+          {{
+            _task01_ok and _task02_ok and _task03_ok and _task04_ok and
+            _task05_ok and _task06_ok and _task07_ok and _task08_ok and
+            _task09_ok and _task10_ok and _task11_ok and _task12_ok
+          }}
+        pass_msg: |
+          Task 1: vmtest namespace exists
+          Task 2: User workload monitoring enabled
+          Task 3: Portworx operator installed (CSV Succeeded)
+          Task 4: Portworx console plugin enabled
+          Task 5: Portworx StorageCluster deployed
+          Task 6: 3+ Portworx pods Running
+          Task 7: pxctl reports PX is operational
+          Task 8: gp3-csi is no longer the default StorageClass
+          Task 9: px-csi-vm StorageClass exists and is default
+          Task 10: HyperConverged CR is Available
+          Task 11: 6+ OS image PVCs are Bound
+          Task 12: virtctl installed on bastion
+        error_msg: |
+          {{ 'OK' if _task01_ok else 'FAILED' }} Task 1: vmtest namespace{{ '' if _task01_ok else ' — run: oc new-project vmtest' }}
+          {{ 'OK' if _task02_ok else 'FAILED' }} Task 2: User workload monitoring{{ '' if _task02_ok else ' — apply cluster-monitoring-config ConfigMap with enableUserWorkload: true' }}
+          {{ 'OK' if _task03_ok else 'FAILED' }} Task 3: Portworx operator CSV{{ '' if _task03_ok else ' — install portworx-enterprise from OperatorHub and approve the InstallPlan' }}
+          {{ 'OK' if _task04_ok else 'FAILED' }} Task 4: Portworx console plugin{{ '' if _task04_ok else ' — enable portworx-console-plugin in the Console CR' }}
+          {{ 'OK' if _task05_ok else 'FAILED' }} Task 5: Portworx StorageCluster{{ '' if _task05_ok else ' — download and apply px-spec.yaml from install.portworx.com' }}
+          {{ 'OK' if _task06_ok else 'FAILED' }} Task 6: Portworx pods Running{{ '' if _task06_ok else ' — pods still starting; click Validate again in a few minutes' }}
+          {{ 'OK' if _task07_ok else 'FAILED' }} Task 7: pxctl status{{ '' if _task07_ok else ' — PX is not yet operational; wait for all pods to be 1/1 Ready then retry' }}
+          {{ 'OK' if _task08_ok else 'FAILED' }} Task 8: gp3-csi non-default{{ '' if _task08_ok else ' — patch gp3-csi annotation storageclass.kubernetes.io/is-default-class to "false"' }}
+          {{ 'OK' if _task09_ok else 'FAILED' }} Task 9: px-csi-vm default StorageClass{{ '' if _task09_ok else ' — create StorageClass px-csi-vm with is-default-class: "true"' }}
+          {{ 'OK' if _task10_ok else 'FAILED' }} Task 10: HyperConverged Available{{ '' if _task10_ok else ' — create kubevirt-hyperconverged CR in openshift-cnv and wait for Available condition' }}
+          {{ 'OK' if _task11_ok else 'FAILED' }} Task 11: OS image PVCs{{ '' if _task11_ok else ' — only ' + (r_os_pvcs.resources | default([]) | selectattr("status.phase", "equalto", "Bound") | list | length | string) + '/6 PVCs Bound in openshift-virtualization-os-images; click Validate again in a few minutes' }}
+          {{ 'OK' if _task12_ok else 'FAILED' }} Task 12: virtctl on bastion{{ '' if _task12_ok else ' — install virtctl: download from consoleclidownload and move to /usr/local/bin/virtctl' }}

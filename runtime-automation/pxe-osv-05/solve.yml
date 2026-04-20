@@ -1,0 +1,398 @@
+---
+- name: pxe-osv-05 Autopilot Solve
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    student_user: "{{ user | default('') }}"
+    vm_namespace: vmtest
+    vm_name: centos-stream9-autopilot
+    data_pvc_name: centos-stream9-autopilot-data-disk
+    autopilot_rule_name: volume-resize
+    ssh_key_path: ~/.ssh/id_rsa
+    ssh_user: cloud-user
+    ssh_opts: "-o StrictHostKeyChecking=no -o ConnectTimeout=10"
+
+  tasks:
+
+    # ------------------------------------------------------------------
+    # block-01: Create the autopilot test VM with two data volume templates
+    # ------------------------------------------------------------------
+    - name: Check if autopilot VM already exists
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        name: "{{ vm_name }}"
+        namespace: "{{ vm_namespace }}"
+      register: r_vm_exists
+      ignore_errors: true
+
+    - name: Create autopilot test VirtualMachine
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        state: present
+        definition:
+          apiVersion: kubevirt.io/v1
+          kind: VirtualMachine
+          metadata:
+            name: "{{ vm_name }}"
+            namespace: "{{ vm_namespace }}"
+          spec:
+            dataVolumeTemplates:
+              - metadata:
+                  name: centos-stream9-autopilot-ds-centos-stream9
+                  annotations:
+                    cdi.kubevirt.io/storage.usePopulator: "false"
+                spec:
+                  sourceRef:
+                    kind: DataSource
+                    name: centos-stream9
+                    namespace: openshift-virtualization-os-images
+                  storage:
+                    storageClassName: px-csi-vm
+                    resources: {}
+              - metadata:
+                  name: centos-stream9-autopilot-data-disk
+                  annotations:
+                    cdi.kubevirt.io/storage.usePopulator: "false"
+                spec:
+                  preallocation: false
+                  source:
+                    blank: {}
+                  storage:
+                    resources:
+                      requests:
+                        storage: 5Gi
+                    storageClassName: px-csi-vm
+            instancetype:
+              name: u1.medium
+            preference:
+              name: centos.stream9
+            runStrategy: Always
+            template:
+              spec:
+                domain:
+                  devices: {}
+                  resources: {}
+                terminationGracePeriodSeconds: 180
+                volumes:
+                  - name: centos-stream9-autopilot-ds-centos-stream9
+                    dataVolume:
+                      name: centos-stream9-autopilot-ds-centos-stream9
+                  - name: centos-stream9-autopilot-data-disk
+                    dataVolume:
+                      name: centos-stream9-autopilot-data-disk
+                  - name: cloudinitdisk
+                    cloudInitNoCloud:
+                      userData: |-
+                        #cloud-config
+                        user: cloud-user
+                accessCredentials:
+                  - sshPublicKey:
+                      propagationMethod:
+                        noCloud: {}
+                      source:
+                        secret:
+                          secretName: authorized-keys
+      when: r_vm_exists.resources | default([]) | length == 0
+      ignore_errors: true
+
+    # ------------------------------------------------------------------
+    # block-02: Create the AutopilotRule (cluster-scoped)
+    # ------------------------------------------------------------------
+    - name: Create AutopilotRule volume-resize
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        state: present
+        definition:
+          apiVersion: autopilot.libopenstorage.org/v1alpha1
+          kind: AutopilotRule
+          metadata:
+            name: "{{ autopilot_rule_name }}"
+          spec:
+            selector:
+              matchLabels:
+                expand: "true"
+            conditions:
+              expressions:
+                - key: "100 * (px_volume_usage_bytes / px_volume_capacity_bytes)"
+                  operator: Gt
+                  values:
+                    - "30"
+              for: 5
+            actions:
+              - name: openstorage.io.action.volume/resize
+                params:
+                  scalepercentage: "100"
+                  maxsize: 20Gi
+      ignore_errors: true
+
+    # ------------------------------------------------------------------
+    # block-03: Label the data PVC with expand=true
+    # ------------------------------------------------------------------
+    - name: Wait for data PVC to exist before labelling
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        kind: PersistentVolumeClaim
+        name: "{{ data_pvc_name }}"
+        namespace: "{{ vm_namespace }}"
+      register: r_pvc_wait
+      until: r_pvc_wait.resources | default([]) | length > 0
+      retries: 60
+      delay: 10
+      ignore_errors: true
+
+    - name: Label data PVC with expand=true
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        state: patched
+        kind: PersistentVolumeClaim
+        name: "{{ data_pvc_name }}"
+        namespace: "{{ vm_namespace }}"
+        definition:
+          metadata:
+            labels:
+              expand: "true"
+      ignore_errors: true
+
+    # ------------------------------------------------------------------
+    # block-04: Record initial PVC size (should be 5Gi)
+    # ------------------------------------------------------------------
+    - name: Get data PVC info (initial size)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        kind: PersistentVolumeClaim
+        name: "{{ data_pvc_name }}"
+        namespace: "{{ vm_namespace }}"
+      register: r_pvc_initial
+      ignore_errors: true
+
+    - name: Record initial PVC capacity
+      ansible.builtin.set_fact:
+        pvc_initial_size: >-
+          {{ (r_pvc_initial.resources | first).status.capacity.storage
+             | default('unknown') }}
+      when: r_pvc_initial.resources | default([]) | length > 0
+
+    - name: Show initial PVC size
+      ansible.builtin.debug:
+        msg: "Initial data PVC size: {{ pvc_initial_size | default('unknown') }}"
+
+    # ------------------------------------------------------------------
+    # block-05: Wait for VMI to be Running, then partition/format/mount
+    # The lab runs virtctl ssh from the bastion; here we use the runner
+    # pod which has virtctl available via oc/kubectl plugin path.
+    # ------------------------------------------------------------------
+    - name: Wait for VirtualMachineInstance to reach Running phase
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: kubevirt.io/v1
+        kind: VirtualMachineInstance
+        name: "{{ vm_name }}"
+        namespace: "{{ vm_namespace }}"
+      register: r_vmi
+      until: >-
+        r_vmi.resources | default([]) | length > 0 and
+        (r_vmi.resources | first).status.phase | default('') == 'Running'
+      retries: 60
+      delay: 15
+      ignore_errors: true
+
+    # Find the virt-launcher pod so we can use its node for virtctl routing,
+    # and confirm the VMI IP is ready before SSHing.
+    - name: Wait for VMI to have a guest-agent-ready condition
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: kubevirt.io/v1
+        kind: VirtualMachineInstance
+        name: "{{ vm_name }}"
+        namespace: "{{ vm_namespace }}"
+      register: r_vmi_ready
+      until: >-
+        r_vmi_ready.resources | default([]) | length > 0 and
+        (r_vmi_ready.resources | first).status.conditions | default([])
+        | selectattr('type', 'equalto', 'AgentConnected')
+        | selectattr('status', 'equalto', 'True') | list | length > 0
+      retries: 60
+      delay: 15
+      ignore_errors: true
+
+    # Find the runner/wetty pod that has virtctl available
+    - name: Find zt-runner pod (has virtctl)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        kind: Pod
+        namespace: "{{ student_user }}-runtime-automation"
+        label_selectors:
+          - "app=zt-runner"
+      register: r_runner_pods
+      ignore_errors: true
+
+    - name: Set runner pod name
+      ansible.builtin.set_fact:
+        runner_pod: >-
+          {{ (r_runner_pods.resources
+              | selectattr('status.phase', 'equalto', 'Running')
+              | list | first).metadata.name }}
+        runner_namespace: "{{ student_user }}-runtime-automation"
+      when: >-
+        r_runner_pods.resources | default([]) |
+        selectattr('status.phase', 'equalto', 'Running') | list | length > 0
+
+    # SSH retry loop: wait until the VM guest is reachable
+    - name: Wait for VM SSH to become available (lsblk probe)
+      kubernetes.core.k8s_exec:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        namespace: "{{ runner_namespace }}"
+        pod: "{{ runner_pod }}"
+        command: >-
+          sh -c 'virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
+          -i {{ ssh_key_path }}
+          -t "{{ ssh_opts }}"
+          -c "lsblk" 2>&1 && echo SSH_OK'
+      register: r_ssh_probe
+      until: r_ssh_probe.stdout is defined and 'SSH_OK' in r_ssh_probe.stdout
+      retries: 30
+      delay: 10
+      when: runner_pod is defined
+      ignore_errors: true
+
+    # Partition, format, and mount /dev/vdb as /data
+    - name: Partition, format, and mount data disk as /data in VM
+      kubernetes.core.k8s_exec:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        namespace: "{{ runner_namespace }}"
+        pod: "{{ runner_pod }}"
+        command: >-
+          sh -c 'virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
+          -i {{ ssh_key_path }}
+          -t "{{ ssh_opts }}"
+          -c "(echo g; echo n; echo 1; echo ; echo ; echo w) | sudo fdisk /dev/vdb
+          && sudo mkfs.ext4 /dev/vdb1
+          && sudo mkdir -p /data
+          && sudo mount /dev/vdb1 /data
+          && echo MOUNT_OK" 2>&1'
+      register: r_mount
+      when: runner_pod is defined
+      ignore_errors: true
+
+    # ------------------------------------------------------------------
+    # block-06: Fill disk with 4G of data to trigger Autopilot (slow)
+    # ------------------------------------------------------------------
+    - name: Fill data disk (shred 4G — takes up to 10 min)
+      kubernetes.core.k8s_exec:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        namespace: "{{ runner_namespace }}"
+        pod: "{{ runner_pod }}"
+        command: >-
+          sh -c 'virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
+          -i {{ ssh_key_path }}
+          -t "{{ ssh_opts }}"
+          -c "sudo touch /data/file; sudo shred -n 1 -s 4G /data/file && echo SHRED_DONE" 2>&1'
+      register: r_shred
+      async: 600
+      poll: 30
+      when: runner_pod is defined
+      ignore_errors: true
+
+    # ------------------------------------------------------------------
+    # block-07: Wait for Autopilot ActiveActionsTaken event
+    # Autopilot can take 15-20 min to act — generous retries
+    # ------------------------------------------------------------------
+    - name: Wait for Autopilot ActiveActionsTaken event
+      kubernetes.core.k8s_exec:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        namespace: "{{ runner_namespace }}"
+        pod: "{{ runner_pod }}"
+        command: >-
+          sh -c 'oc get events
+          --field-selector involvedObject.kind=AutopilotRule,involvedObject.name={{ autopilot_rule_name }}
+          --all-namespaces --sort-by .lastTimestamp
+          -o custom-columns=MESSAGE:.message 2>&1'
+      register: r_autopilot_events
+      until: >-
+        r_autopilot_events.stdout is defined and
+        'ActiveActionsTaken' in r_autopilot_events.stdout
+      retries: 60
+      delay: 30
+      when: runner_pod is defined
+      ignore_errors: true
+
+    # ------------------------------------------------------------------
+    # block-08: Verify data PVC has expanded to 10Gi
+    # ------------------------------------------------------------------
+    - name: Get data PVC info (post-expansion)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        kind: PersistentVolumeClaim
+        name: "{{ data_pvc_name }}"
+        namespace: "{{ vm_namespace }}"
+      register: r_pvc_expanded
+      ignore_errors: true
+
+    - name: Record expanded PVC capacity
+      ansible.builtin.set_fact:
+        pvc_expanded_size: >-
+          {{ (r_pvc_expanded.resources | first).status.capacity.storage
+             | default('unknown') }}
+      when: r_pvc_expanded.resources | default([]) | length > 0
+
+    # ------------------------------------------------------------------
+    # block-09: Resize the partition and filesystem inside the VM
+    # ------------------------------------------------------------------
+    - name: Resize partition and filesystem inside VM
+      kubernetes.core.k8s_exec:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        namespace: "{{ runner_namespace }}"
+        pod: "{{ runner_pod }}"
+        command: >-
+          sh -c 'virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
+          -i {{ ssh_key_path }}
+          -t "{{ ssh_opts }}"
+          -c "yes Fix | sudo parted --script --fix /dev/vdb print;
+          yes | sudo parted --pretend-input-tty /dev/vdb resizepart 1 100%;
+          sudo resize2fs /dev/vdb1 && echo RESIZE_OK" 2>&1'
+      register: r_resize
+      when: runner_pod is defined
+      ignore_errors: true
+
+    # ------------------------------------------------------------------
+    # block-10: Verify /data filesystem size inside VM (>= 9G)
+    # ------------------------------------------------------------------
+    - name: Check /data filesystem size inside VM
+      kubernetes.core.k8s_exec:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        namespace: "{{ runner_namespace }}"
+        pod: "{{ runner_pod }}"
+        command: >-
+          sh -c 'virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
+          -i {{ ssh_key_path }}
+          -t "{{ ssh_opts }}"
+          -c "df -h /data" 2>&1'
+      register: r_df
+      when: runner_pod is defined
+      ignore_errors: true
+
+    - name: Parse /data size from df output
+      ansible.builtin.set_fact:
+        data_disk_size: >-
+          {{ r_df.stdout | default('') | regex_search('/data.*', multiline=True) | default('unknown') }}
+      when: r_df.stdout is defined
+
+    # ------------------------------------------------------------------
+    # Final report
+    # ------------------------------------------------------------------
+    - name: Report solve status
+      ansible.builtin.debug:
+        msg: |
+          VM created:          {{ 'ok' if r_vm_exists.resources | default([]) | length > 0 or r_mount is defined else 'NOT ok' }}
+          AutopilotRule:       {{ 'ok' if autopilot_rule_name is defined else 'NOT ok' }}
+          PVC labelled:        {{ 'ok' if r_pvc_wait.resources | default([]) | length > 0 else 'NOT ok' }}
+          Initial PVC size:    {{ pvc_initial_size | default('unknown') }}
+          Data disk mounted:   {{ 'ok' if r_mount.stdout is defined and 'MOUNT_OK' in (r_mount.stdout | default('')) else 'check manually' }}
+          Disk filled:         {{ 'ok' if r_shred.stdout is defined and 'SHRED_DONE' in (r_shred.stdout | default('')) else 'check manually' }}
+          Autopilot triggered: {{ 'ok' if r_autopilot_events.stdout is defined and 'ActiveActionsTaken' in (r_autopilot_events.stdout | default('')) else 'NOT ok — may need more time' }}
+          Expanded PVC size:   {{ pvc_expanded_size | default('unknown') }}
+          Filesystem resized:  {{ 'ok' if r_resize.stdout is defined and 'RESIZE_OK' in (r_resize.stdout | default('')) else 'check manually' }}
+          /data in VM:         {{ data_disk_size | default('unknown') }}

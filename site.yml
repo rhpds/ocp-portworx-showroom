@@ -15,6 +15,15 @@ ui:
     snapshot: true
   supplemental_files:
   - path: ./content/supplemental-ui
+  - path: ./content/lib
+  - path: ui.yml
+    contents: "static_files: [ .nojekyll, css/site-extra.css, js/buttons.js ]"
+
+antora:
+  extensions:
+  - require: ./content/lib/dev-mode.js
+    enabled: false
+  - require: ./content/lib/inject-buttons.js
 
 runtime:
   fetch: true

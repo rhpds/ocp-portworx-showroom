@@ -1,0 +1,219 @@
+---
+- name: pxe-osv-02 Solve - Create virtual machines
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    student_user: "{{ user | default('admin') }}"
+    vm_namespace: vmtest
+    vm_name: centos-stream9-example
+    vm_dv_name: centos-stream9-example-ds-centos-stream9
+    secret_name: authorized-keys
+
+  tasks:
+    # ------------------------------------------------------------------
+    # block-01: Generate SSH keypair
+    # Generate a fresh RSA keypair in the runner container and capture
+    # the public key as a fact for use in the Secret below.
+    # ------------------------------------------------------------------
+    - name: Check if SSH key already exists in runner
+      ansible.builtin.stat:
+        path: /tmp/solve_id_rsa.pub
+      register: r_ssh_key_stat
+
+    - name: Generate SSH keypair in runner
+      ansible.builtin.command: ssh-keygen -t rsa -b 4096 -f /tmp/solve_id_rsa -N ""
+      when: not r_ssh_key_stat.stat.exists
+      register: r_ssh_keygen
+      changed_when: r_ssh_keygen.rc == 0
+
+    - name: Read SSH public key
+      ansible.builtin.slurp:
+        src: /tmp/solve_id_rsa.pub
+      register: r_pubkey
+
+    - name: Set SSH public key fact (already base64 from slurp)
+      ansible.builtin.set_fact:
+        ssh_pubkey_b64: "{{ r_pubkey.content }}"
+
+    # ------------------------------------------------------------------
+    # block-02: Create vmtest namespace
+    # ------------------------------------------------------------------
+    - name: Create vmtest namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ vm_namespace }}"
+      ignore_errors: true
+
+    # ------------------------------------------------------------------
+    # block-03: Create authorized-keys Secret with SSH public key
+    # The key data is already base64-encoded by ansible.builtin.slurp.
+    # ------------------------------------------------------------------
+    - name: Create authorized-keys Secret in vmtest
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ secret_name }}"
+            namespace: "{{ vm_namespace }}"
+          data:
+            key: "{{ ssh_pubkey_b64 }}"
+      ignore_errors: true
+
+    # ------------------------------------------------------------------
+    # block-04: Create VirtualMachine centos-stream9-example
+    # Uses kubevirt.io/v1 with DataVolumeTemplate sourcing the
+    # centos-stream9 DataSource. No storageClassName — cluster default
+    # (px-csi-vm) is used. References authorized-keys Secret.
+    # ------------------------------------------------------------------
+    - name: Check if VirtualMachine already exists
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        name: "{{ vm_name }}"
+        namespace: "{{ vm_namespace }}"
+      register: r_vm_check
+      ignore_errors: true
+
+    - name: Create VirtualMachine centos-stream9-example
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        state: present
+        definition:
+          apiVersion: kubevirt.io/v1
+          kind: VirtualMachine
+          metadata:
+            name: "{{ vm_name }}"
+            namespace: "{{ vm_namespace }}"
+          spec:
+            dataVolumeTemplates:
+            - metadata:
+                name: "{{ vm_dv_name }}"
+                annotations:
+                  cdi.kubevirt.io/storage.usePopulator: "false"
+              spec:
+                sourceRef:
+                  kind: DataSource
+                  name: centos-stream9
+                  namespace: openshift-virtualization-os-images
+                storage:
+                  resources: {}
+            instancetype:
+              name: u1.medium
+            preference:
+              name: centos.stream9
+            runStrategy: Always
+            template:
+              spec:
+                domain:
+                  devices: {}
+                  resources: {}
+                terminationGracePeriodSeconds: 180
+                volumes:
+                - name: "{{ vm_dv_name }}"
+                  dataVolume:
+                    name: "{{ vm_dv_name }}"
+                - name: cloudinitdisk
+                  cloudInitNoCloud:
+                    userData: |-
+                      #cloud-config
+                      user: cloud-user
+                accessCredentials:
+                - sshPublicKey:
+                    propagationMethod:
+                      noCloud: {}
+                    source:
+                      secret:
+                        secretName: "{{ secret_name }}"
+      when: r_vm_check.resources | default([]) | length == 0
+      ignore_errors: true
+
+    # ------------------------------------------------------------------
+    # block-05: Wait for VM ready and DataVolume Succeeded
+    # Polls up to 300 seconds (5 minutes) for both conditions.
+    # ------------------------------------------------------------------
+    - name: Wait for DataVolume to reach Ready (up to 5 min)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: cdi.kubevirt.io/v1beta1
+        kind: DataVolume
+        name: "{{ vm_dv_name }}"
+        namespace: "{{ vm_namespace }}"
+        wait: true
+        wait_condition:
+          type: Ready
+          status: "True"
+        wait_timeout: 300
+      register: r_dv_wait
+      ignore_errors: true
+
+    - name: Wait for VirtualMachine to report Ready (up to 5 min)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        name: "{{ vm_name }}"
+        namespace: "{{ vm_namespace }}"
+        wait: true
+        wait_condition:
+          type: Ready
+          status: "True"
+        wait_timeout: 300
+      register: r_vm_wait
+      ignore_errors: true
+
+    # ------------------------------------------------------------------
+    # block-06: virtctl ssh SKIP
+    # Student step: SSH into running VM to verify access interactively.
+    # Not automatable: interactive session with no verifiable outcome.
+    # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Report solve status
+    # ------------------------------------------------------------------
+    - name: Gather final VirtualMachine status
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        name: "{{ vm_name }}"
+        namespace: "{{ vm_namespace }}"
+      register: r_vm_final
+      ignore_errors: true
+
+    - name: Gather final DataVolume status
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: cdi.kubevirt.io/v1beta1
+        kind: DataVolume
+        name: "{{ vm_dv_name }}"
+        namespace: "{{ vm_namespace }}"
+      register: r_dv_final
+      ignore_errors: true
+
+    - name: Gather final Secret status
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: v1
+        kind: Secret
+        name: "{{ secret_name }}"
+        namespace: "{{ vm_namespace }}"
+      register: r_secret_final
+      ignore_errors: true
+
+    - name: Report solve status
+      ansible.builtin.debug:
+        msg: |
+          Namespace vmtest:            {{ 'ok' if r_vm_final.resources | default([]) | length > 0 else 'NOT ok' }}
+          Secret authorized-keys:      {{ 'ok' if r_secret_final.resources | default([]) | length > 0 else 'NOT ok' }}
+          VirtualMachine ready:        {{ 'ok' if (r_vm_final.resources | default([{}]) | first).status.ready | default(false) else 'NOT ok' }}
+          DataVolume phase:            {{ (r_dv_final.resources | default([{}]) | first).status.phase | default('Unknown') }}

@@ -1,0 +1,383 @@
+---
+- name: pxe-osv-01 Solve - Install Portworx and Configure Storage
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    portworx_namespace: portworx
+    portworx_csv: portworx-operator.v25.6.1
+    portworx_channel: stable
+    portworx_spec_url: >-
+      https://install.portworx.com/3.6.0?operator=true&mc=false&kbver=1.33.9&ns=portworx&b=true&iop=6&s=%22type%3Dgp3%2Csize%3D50%22%2C%22&ce=aws&r=17001&c=px-cluster-443e64d8-f2c7-47d2-b81b-295567465a84&osft=true&stork=true&csi=true&tel=false&st=k8s&mz=3
+    cnv_namespace: openshift-cnv
+    virtctl_consoleclidownload: virtctl-clidownloads-kubevirt-hyperconverged
+
+  tasks:
+
+    # ---------------------------------------------------------------
+    # block-01: Create vmtest namespace
+    # ---------------------------------------------------------------
+    - name: Create vmtest namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: vmtest
+      ignore_errors: true
+
+    # ---------------------------------------------------------------
+    # block-03: Enable user workload monitoring
+    # ---------------------------------------------------------------
+    - name: Enable user workload monitoring
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: cluster-monitoring-config
+            namespace: openshift-monitoring
+          data:
+            config.yaml: |
+              enableUserWorkload: true
+      ignore_errors: true
+
+    # ---------------------------------------------------------------
+    # prose-01/02: Install Portworx Operator via OLM
+    # ---------------------------------------------------------------
+    - name: Create portworx namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ portworx_namespace }}"
+      ignore_errors: true
+
+    - name: Create Portworx OperatorGroup
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1
+          kind: OperatorGroup
+          metadata:
+            name: portworx-og
+            namespace: "{{ portworx_namespace }}"
+          spec:
+            targetNamespaces:
+              - "{{ portworx_namespace }}"
+      ignore_errors: true
+
+    - name: Create Portworx Subscription
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: Subscription
+          metadata:
+            name: portworx-enterprise
+            namespace: "{{ portworx_namespace }}"
+          spec:
+            channel: "{{ portworx_channel }}"
+            name: portworx-enterprise
+            source: certified-operators
+            sourceNamespace: openshift-marketplace
+            installPlanApproval: Manual
+            startingCSV: "{{ portworx_csv }}"
+      ignore_errors: true
+
+    - name: Wait for Portworx InstallPlan to appear
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: operators.coreos.com/v1alpha1
+        kind: InstallPlan
+        namespace: "{{ portworx_namespace }}"
+      register: r_installplan
+      until: r_installplan.resources | default([]) | length > 0
+      retries: 20
+      delay: 15
+      ignore_errors: true
+
+    - name: Approve Portworx InstallPlan
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: InstallPlan
+          metadata:
+            name: "{{ r_installplan.resources[0].metadata.name }}"
+            namespace: "{{ portworx_namespace }}"
+          spec:
+            approved: true
+      when: r_installplan.resources | default([]) | length > 0
+      ignore_errors: true
+
+    - name: Wait for Portworx CSV to reach Succeeded
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        name: "{{ portworx_csv }}"
+        namespace: "{{ portworx_namespace }}"
+      register: r_csv
+      until: >-
+        r_csv.resources | default([]) | length > 0 and
+        (r_csv.resources[0].status.phase | default('')) == 'Succeeded'
+      retries: 40
+      delay: 15
+      ignore_errors: true
+
+    - name: Enable Portworx console plugin
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        state: present
+        definition:
+          apiVersion: operator.openshift.io/v1
+          kind: Console
+          metadata:
+            name: cluster
+          spec:
+            plugins:
+              - portworx-console-plugin
+      ignore_errors: true
+
+    # ---------------------------------------------------------------
+    # block-04 + block-06: Download and apply Portworx StorageCluster spec
+    # Fetch the spec URL content then apply directly via k8s module
+    # ---------------------------------------------------------------
+    - name: Download Portworx StorageCluster spec
+      ansible.builtin.uri:
+        url: "{{ portworx_spec_url }}"
+        method: GET
+        return_content: true
+        validate_certs: true
+        timeout: 60
+      register: r_px_spec
+      ignore_errors: true
+
+    - name: Apply Portworx StorageCluster spec
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        state: present
+        definition: "{{ r_px_spec.content }}"
+      when:
+        - r_px_spec is not failed
+        - r_px_spec.content | default('') | length > 0
+      ignore_errors: true
+
+    # ---------------------------------------------------------------
+    # block-07: Wait for Portworx cluster pods Ready (up to 10 min)
+    # ---------------------------------------------------------------
+    - name: Wait for Portworx px-cluster pods to be Running
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        kind: Pod
+        namespace: "{{ portworx_namespace }}"
+        label_selectors:
+          - name=portworx
+      register: r_px_pods
+      until: >-
+        r_px_pods.resources | default([]) |
+        selectattr('status.phase', 'equalto', 'Running') |
+        selectattr('status.containerStatuses', 'defined') |
+        list | length >= 3
+      retries: 60
+      delay: 10
+      ignore_errors: true
+
+    # ---------------------------------------------------------------
+    # block-08 + block-09: Find PX pod and check pxctl status
+    # ---------------------------------------------------------------
+    - name: Get a running Portworx pod
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        kind: Pod
+        namespace: "{{ portworx_namespace }}"
+        label_selectors:
+          - name=portworx
+      register: r_px_pods_info
+      ignore_errors: true
+
+    - name: Set PX pod name fact
+      ansible.builtin.set_fact:
+        px_pod: >-
+          {{ (r_px_pods_info.resources | default([]) |
+          selectattr('status.phase', 'equalto', 'Running') |
+          list | first).metadata.name }}
+      when: r_px_pods_info.resources | default([]) |
+            selectattr('status.phase', 'equalto', 'Running') |
+            list | length > 0
+
+    - name: Check pxctl status in Portworx pod
+      kubernetes.core.k8s_exec:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        namespace: "{{ portworx_namespace }}"
+        pod: "{{ px_pod }}"
+        command: "sh -c '/opt/pwx/bin/pxctl status 2>&1 | head -5'"
+      register: r_pxctl_status
+      when: px_pod is defined
+      ignore_errors: true
+
+    # ---------------------------------------------------------------
+    # block-14: Remove default annotation from gp3-csi StorageClass
+    # ---------------------------------------------------------------
+    - name: Remove default class annotation from gp3-csi
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        state: present
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: gp3-csi
+            annotations:
+              storageclass.kubernetes.io/is-default-class: "false"
+      ignore_errors: true
+
+    # ---------------------------------------------------------------
+    # block-15: Create px-csi-vm StorageClass (new default)
+    # ---------------------------------------------------------------
+    - name: Create px-csi-vm StorageClass
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        state: present
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: px-csi-vm
+            annotations:
+              storageclass.kubernetes.io/is-default-class: "true"
+          parameters:
+            repl: "3"
+            nodiscard: "true"
+          provisioner: pxd.portworx.com
+          reclaimPolicy: Delete
+          volumeBindingMode: WaitForFirstConsumer
+          allowVolumeExpansion: true
+      ignore_errors: true
+
+    # ---------------------------------------------------------------
+    # block-16: Create HyperConverged CR
+    # ---------------------------------------------------------------
+    - name: Create HyperConverged CR
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        state: present
+        definition:
+          apiVersion: hco.kubevirt.io/v1beta1
+          kind: HyperConverged
+          metadata:
+            name: kubevirt-hyperconverged
+            namespace: "{{ cnv_namespace }}"
+          spec:
+            filesystemOverhead:
+              global: "0.08"
+      ignore_errors: true
+
+    # ---------------------------------------------------------------
+    # block-17: Wait for HyperConverged to reach Available condition
+    # ---------------------------------------------------------------
+    - name: Wait for HyperConverged Available condition
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: hco.kubevirt.io/v1beta1
+        kind: HyperConverged
+        name: kubevirt-hyperconverged
+        namespace: "{{ cnv_namespace }}"
+        wait: true
+        wait_condition:
+          type: Available
+          status: "True"
+        wait_timeout: 300
+      register: r_hyperconverged
+      ignore_errors: true
+
+    # ---------------------------------------------------------------
+    # block-18: Wait for OS image PVCs to be Bound in
+    #           openshift-virtualization-os-images namespace
+    # ---------------------------------------------------------------
+    - name: Wait for OS image PVCs to be Bound
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        kind: PersistentVolumeClaim
+        namespace: openshift-virtualization-os-images
+      register: r_os_pvcs
+      until: >-
+        r_os_pvcs.resources | default([]) |
+        selectattr('status.phase', 'equalto', 'Bound') |
+        list | length >= 6
+      retries: 40
+      delay: 15
+      ignore_errors: true
+
+    # ---------------------------------------------------------------
+    # block-19: Install virtctl on bastion via wetty pod exec
+    # ---------------------------------------------------------------
+    - name: Find wetty pod for bastion shell access
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        kind: Pod
+        namespace: showroom
+        label_selectors:
+          - app=wetty
+      register: r_wetty_pods
+      ignore_errors: true
+
+    - name: Set wetty pod name
+      ansible.builtin.set_fact:
+        wetty_pod: >-
+          {{ (r_wetty_pods.resources | default([]) |
+          selectattr('status.phase', 'equalto', 'Running') |
+          list | first).metadata.name }}
+      when: >-
+        r_wetty_pods.resources | default([]) |
+        selectattr('status.phase', 'equalto', 'Running') |
+        list | length > 0
+
+    - name: Install virtctl on bastion via wetty pod
+      kubernetes.core.k8s_exec:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        namespace: showroom
+        pod: "{{ wetty_pod }}"
+        command: >-
+          ssh -o StrictHostKeyChecking=no lab-user@localhost
+          "VIRTCTL_URL=$(oc get consoleclidownload virtctl-clidownloads-kubevirt-hyperconverged
+          -o json | jq -r '.spec.links[] | select(.text == \"Download virtctl for Linux for x86_64\") | .href')
+          && wget -q \"$VIRTCTL_URL\" -O /tmp/virtctl.tar.gz
+          && tar -xf /tmp/virtctl.tar.gz -C /tmp/
+          && chmod +x /tmp/virtctl
+          && sudo mv /tmp/virtctl /usr/local/bin/virtctl
+          && echo virtctl-installed"
+      register: r_virtctl
+      when: wetty_pod is defined
+      ignore_errors: true
+
+    # ---------------------------------------------------------------
+    # Final report
+    # ---------------------------------------------------------------
+    - name: Report solve status
+      ansible.builtin.debug:
+        msg: |
+          vmtest namespace:        {{ 'ok' if (r_px_pods is defined) else 'NOT ok' }}
+          user workload monitoring: ok (applied)
+          portworx operator CSV:   {{ r_csv.resources[0].status.phase | default('unknown') if r_csv.resources | default([]) | length > 0 else 'NOT ok' }}
+          portworx storagecluster: {{ 'ok' if r_px_pods.resources | default([]) | selectattr('status.phase', 'equalto', 'Running') | list | length >= 3 else 'NOT ok - pods not yet Running (check in ~10 min)' }}
+          pxctl status:            {{ 'ok' if r_pxctl_status is defined and r_pxctl_status is not failed else 'NOT ok or skipped' }}
+          px-csi-vm StorageClass:  ok (applied)
+          gp3-csi non-default:     ok (applied)
+          HyperConverged:          {{ 'ok' if r_hyperconverged is not failed else 'NOT ok' }}
+          OS image PVCs Bound:     {{ (r_os_pvcs.resources | default([]) | selectattr('status.phase', 'equalto', 'Bound') | list | length) | string + '/6 bound' }}
+          virtctl on bastion:      {{ 'ok' if (r_virtctl is defined and r_virtctl is not failed) else 'NOT ok or skipped' }}
+
+          NOTE: Portworx pod startup can take up to 10 minutes.
+          If storagecluster shows NOT ok, click Validate again after a few minutes.

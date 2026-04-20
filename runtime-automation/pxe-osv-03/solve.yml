@@ -1,0 +1,332 @@
+---
+- name: pxe-osv-03 Live Migrations and High Availability Solve
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    student_user: "{{ user | default('lab-user') }}"
+    vm_name: centos-stream9-example
+    vm_namespace: vmtest
+    ssh_key_path: ~/.ssh/id_rsa
+    ssh_opts: "-o StrictHostKeyChecking=no"
+
+  tasks:
+
+    # ------------------------------------------------------------------
+    # Step 1 — Write data to VM to verify persistence through migration/HA
+    # ------------------------------------------------------------------
+
+    - name: Find bastion pod (showroom wetty)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        kind: Pod
+        namespace: showroom
+        label_selectors:
+          - "app=wetty"
+      register: r_bastion_pod
+      ignore_errors: true
+
+    - name: Set bastion pod name
+      ansible.builtin.set_fact:
+        bastion_pod: >-
+          {{
+            (r_bastion_pod.resources
+             | selectattr('status.phase', 'equalto', 'Running')
+             | list | first).metadata.name
+          }}
+      when: >-
+        r_bastion_pod.resources | default([])
+        | selectattr('status.phase', 'equalto', 'Running')
+        | list | length > 0
+
+    - name: Write 'Red Hat was here' to ~/text inside VM (via bastion)
+      kubernetes.core.k8s_exec:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        namespace: showroom
+        pod: "{{ bastion_pod }}"
+        command: >-
+          sh -c 'virtctl ssh cloud-user@vm/{{ vm_name }}/{{ vm_namespace }}
+          -i {{ ssh_key_path }}
+          -t "{{ ssh_opts }}"
+          -c "echo \"Red Hat was here\" > ~/text && echo written"'
+      when: bastion_pod is defined
+      register: r_write_text
+      ignore_errors: true
+
+    - name: Verify text file written to VM
+      kubernetes.core.k8s_exec:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        namespace: showroom
+        pod: "{{ bastion_pod }}"
+        command: >-
+          sh -c 'virtctl ssh cloud-user@vm/{{ vm_name }}/{{ vm_namespace }}
+          -i {{ ssh_key_path }}
+          -t "{{ ssh_opts }}"
+          -c "cat ~/text"'
+      when: bastion_pod is defined
+      register: r_verify_text_initial
+      ignore_errors: true
+
+    # ------------------------------------------------------------------
+    # Step 2 — Verify PVC has ReadWriteMany access mode
+    # ------------------------------------------------------------------
+
+    - name: Get PVCs in vmtest namespace
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        kind: PersistentVolumeClaim
+        namespace: "{{ vm_namespace }}"
+      register: r_pvcs
+      ignore_errors: true
+
+    # ------------------------------------------------------------------
+    # prose-02 — Trigger live migration via VirtualMachineInstanceMigration CRD
+    # (replaces Console UI: Actions → Migrate)
+    # ------------------------------------------------------------------
+
+    - name: Delete any existing VMIM for idempotency
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        state: absent
+        api_version: kubevirt.io/v1
+        kind: VirtualMachineInstanceMigration
+        namespace: "{{ vm_namespace }}"
+        name: "solve-migrate-{{ vm_name }}"
+      ignore_errors: true
+
+    - name: Create VirtualMachineInstanceMigration to live migrate VM
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        state: present
+        definition:
+          apiVersion: kubevirt.io/v1
+          kind: VirtualMachineInstanceMigration
+          metadata:
+            name: "solve-migrate-{{ vm_name }}"
+            namespace: "{{ vm_namespace }}"
+          spec:
+            vmiName: "{{ vm_name }}"
+      register: r_vmim
+      ignore_errors: true
+
+    - name: Wait for live migration to complete (phase Succeeded)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: kubevirt.io/v1
+        kind: VirtualMachineInstanceMigration
+        namespace: "{{ vm_namespace }}"
+        name: "solve-migrate-{{ vm_name }}"
+      register: r_vmim_status
+      until: >-
+        r_vmim_status.resources | default([]) | length > 0 and
+        (r_vmim_status.resources | first).status.phase | default('') == 'Succeeded'
+      retries: 30
+      delay: 10
+      ignore_errors: true
+
+    - name: Delete VMIM after successful migration (idempotency)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        state: absent
+        api_version: kubevirt.io/v1
+        kind: VirtualMachineInstanceMigration
+        namespace: "{{ vm_namespace }}"
+        name: "solve-migrate-{{ vm_name }}"
+      ignore_errors: true
+
+    # ------------------------------------------------------------------
+    # block-04/05 — Check pods and VM state after migration
+    # ------------------------------------------------------------------
+
+    - name: Get pods in vmtest namespace (post-migration check)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        kind: Pod
+        namespace: "{{ vm_namespace }}"
+      register: r_pods_post_migration
+      ignore_errors: true
+
+    - name: Get VMs in vmtest namespace (verify Running)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        namespace: "{{ vm_namespace }}"
+      register: r_vms
+      ignore_errors: true
+
+    # ------------------------------------------------------------------
+    # block-06 — Verify data persistence after live migration
+    # ------------------------------------------------------------------
+
+    - name: Verify text file persists after live migration (via bastion)
+      kubernetes.core.k8s_exec:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        namespace: showroom
+        pod: "{{ bastion_pod }}"
+        command: >-
+          sh -c 'virtctl ssh cloud-user@vm/{{ vm_name }}/{{ vm_namespace }}
+          -i {{ ssh_key_path }}
+          -t "{{ ssh_opts }}"
+          -c "cat ~/text"'
+      when: bastion_pod is defined
+      register: r_verify_text_post_migration
+      ignore_errors: true
+
+    # ------------------------------------------------------------------
+    # Step 3 — HA: Induce node failure (reboot node running the VM)
+    # WARNING: intentionally destructive — reboots a cluster worker node.
+    # The showroom pod may restart if it runs on the same node.
+    # ------------------------------------------------------------------
+
+    - name: Get running virt-launcher pod to find VM node
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        kind: Pod
+        namespace: "{{ vm_namespace }}"
+        label_selectors:
+          - "kubevirt.io=virt-launcher"
+      register: r_launcher_pods
+      ignore_errors: true
+
+    - name: Set node name where VM is running
+      ansible.builtin.set_fact:
+        vm_node: >-
+          {{
+            (r_launcher_pods.resources
+             | selectattr('status.phase', 'equalto', 'Running')
+             | selectattr('metadata.name', 'contains', 'stream9-example')
+             | list | first).spec.nodeName
+          }}
+      when: >-
+        r_launcher_pods.resources | default([])
+        | selectattr('status.phase', 'equalto', 'Running')
+        | selectattr('metadata.name', 'contains', 'stream9-example')
+        | list | length > 0
+      ignore_errors: true
+
+    # WARNING: This reboots the worker node. The showroom pod may be killed.
+    # The runner pod (in a different namespace) should survive.
+    # We use oc debug with a one-shot command to avoid interactive session.
+    - name: >-
+        WARNING - Reboot worker node hosting VM (intentionally destructive HA test)
+      kubernetes.core.k8s_exec:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        namespace: showroom
+        pod: "{{ bastion_pod }}"
+        command: >-
+          sh -c 'oc debug node/{{ vm_node }}
+          --to-namespace={{ vm_namespace }}
+          -- chroot /host reboot &
+          sleep 5 && echo "reboot-triggered"'
+      when:
+        - bastion_pod is defined
+        - vm_node is defined
+      register: r_reboot
+      ignore_errors: true
+
+    # ------------------------------------------------------------------
+    # block-11 — Wait for VM to recover on a new node after reboot
+    # ------------------------------------------------------------------
+
+    - name: Wait for virt-launcher pod to be Running again after node reboot
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        kind: Pod
+        namespace: "{{ vm_namespace }}"
+        label_selectors:
+          - "kubevirt.io=virt-launcher"
+      register: r_launcher_recovered
+      until: >-
+        r_launcher_recovered.resources | default([])
+        | selectattr('status.phase', 'equalto', 'Running')
+        | selectattr('metadata.name', 'contains', 'stream9-example')
+        | list | length > 0
+      retries: 60
+      delay: 10
+      ignore_errors: true
+
+    # ------------------------------------------------------------------
+    # Refresh bastion pod after potential showroom restart
+    # ------------------------------------------------------------------
+
+    - name: Re-discover bastion pod after potential showroom restart
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        kind: Pod
+        namespace: showroom
+        label_selectors:
+          - "app=wetty"
+      register: r_bastion_pod_refresh
+      until: >-
+        r_bastion_pod_refresh.resources | default([])
+        | selectattr('status.phase', 'equalto', 'Running')
+        | list | length > 0
+      retries: 30
+      delay: 10
+      ignore_errors: true
+
+    - name: Refresh bastion pod name after potential restart
+      ansible.builtin.set_fact:
+        bastion_pod: >-
+          {{
+            (r_bastion_pod_refresh.resources
+             | selectattr('status.phase', 'equalto', 'Running')
+             | list | first).metadata.name
+          }}
+      when: >-
+        r_bastion_pod_refresh.resources | default([])
+        | selectattr('status.phase', 'equalto', 'Running')
+        | list | length > 0
+
+    # ------------------------------------------------------------------
+    # block-12 — Verify data persistence after HA node reboot
+    # ------------------------------------------------------------------
+
+    - name: Verify text file persists after HA node reboot (via bastion)
+      kubernetes.core.k8s_exec:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        namespace: showroom
+        pod: "{{ bastion_pod }}"
+        command: >-
+          sh -c 'virtctl ssh cloud-user@vm/{{ vm_name }}/{{ vm_namespace }}
+          -i {{ ssh_key_path }}
+          -t "{{ ssh_opts }}"
+          -c "cat ~/text"'
+      when: bastion_pod is defined
+      register: r_verify_text_post_ha
+      ignore_errors: true
+
+    # ------------------------------------------------------------------
+    # Report
+    # ------------------------------------------------------------------
+
+    - name: Report solve status
+      ansible.builtin.debug:
+        msg: |
+          PVC has ReadWriteMany:     {{ 'ok' if (r_pvcs.resources | default([])
+            | selectattr('spec.accessModes', 'defined')
+            | selectattr('spec.accessModes', 'contains', 'ReadWriteMany')
+            | list | length > 0) else 'NOT ok' }}
+
+          Text written to VM:        {{ 'ok' if (r_write_text.stdout | default('') | length > 0) else 'NOT ok' }}
+
+          Text readable pre-migrate: {{ 'ok' if ('Red Hat was here' in (r_verify_text_initial.stdout | default(''))) else 'NOT ok' }}
+
+          Live migration Succeeded:  {{ 'ok' if (r_vmim_status.resources | default([]) | length > 0
+            and (r_vmim_status.resources | first).status.phase | default('') == 'Succeeded') else 'NOT ok' }}
+
+          VM Running post-migration: {{ 'ok' if (r_vms.resources | default([])
+            | selectattr('status.printableStatus', 'equalto', 'Running')
+            | list | length > 0) else 'NOT ok' }}
+
+          Text persists post-migrate: {{ 'ok' if ('Red Hat was here' in (r_verify_text_post_migration.stdout | default(''))) else 'NOT ok' }}
+
+          Node reboot triggered:     {{ 'ok' if (r_reboot.stdout | default('') | length > 0) else 'NOT ok / skipped' }}
+
+          VM recovered post-HA:      {{ 'ok' if (r_launcher_recovered.resources | default([])
+            | selectattr('status.phase', 'equalto', 'Running')
+            | selectattr('metadata.name', 'contains', 'stream9-example')
+            | list | length > 0) else 'NOT ok (still recovering)' }}
+
+          Text persists post-HA:     {{ 'ok' if ('Red Hat was here' in (r_verify_text_post_ha.stdout | default(''))) else 'NOT ok' }}
