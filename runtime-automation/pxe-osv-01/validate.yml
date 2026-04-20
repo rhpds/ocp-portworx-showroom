@@ -263,7 +263,7 @@
     # Validate all tasks
     # -------------------------------------------------------
     - name: Validate all tasks
-      rhpds.ftl.validation_check:
+      validation_check:
         check: >-
           {{
             _task01_ok and _task02_ok and _task03_ok and _task04_ok and

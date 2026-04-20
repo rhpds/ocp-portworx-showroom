@@ -78,7 +78,7 @@
              (r_dv.resources | default([{}]) | first).status.phase | default('') == 'Succeeded' }}
 
     - name: Validate all tasks
-      rhpds.ftl.validation_check:
+      validation_check:
         check: "{{ _task1_ok and _task2_ok and _task3_ok and _task4_ok }}"
         pass_msg: |
           Task 1: Namespace vmtest exists
