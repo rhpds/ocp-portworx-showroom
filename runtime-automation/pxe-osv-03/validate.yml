@@ -56,44 +56,17 @@
     # -------------------------------------------------------
     # Check 4 — ~/text contains "Red Hat was here" inside VM
     # Proves: initial write AND persistence through migration AND through HA
-    # Uses virtctl ssh via the showroom bastion (wetty) pod
+    # Uses virtctl ssh via direct SSH to bastion host
     # -------------------------------------------------------
-    - name: Find running bastion pod (showroom wetty)
-      kubernetes.core.k8s_info:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        kind: Pod
-        namespace: "showroom-{{ guid }}"
-        label_selectors:
-          - "app.kubernetes.io/name=showroom"
-      register: r_bastion_pod
-      ignore_errors: true
-
-    - name: Set bastion pod name
-      ansible.builtin.set_fact:
-        bastion_pod: >-
-          {{
-            (r_bastion_pod.resources
-             | selectattr('status.phase', 'equalto', 'Running')
-             | list | first).metadata.name
-          }}
-      when: >-
-        r_bastion_pod.resources | default([])
-        | selectattr('status.phase', 'equalto', 'Running')
-        | list | length > 0
-
     - name: Read ~/text from VM via bastion (virtctl ssh)
-      kubernetes.core.k8s_exec:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: "showroom-{{ guid }}"
-        pod: "{{ bastion_pod }}"
-        container: wetty
-        command: >-
-          sh -c 'virtctl ssh cloud-user@vm/{{ vm_name }}/{{ vm_namespace }}
-          -i {{ ssh_key_path }}
-          -t "{{ ssh_opts }}"
-          -c "cat ~/text 2>/dev/null || echo __missing__"'
-      when: bastion_pod is defined
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
+        {{ bastion_user }}@{{ bastion_host }}
+        "virtctl ssh cloud-user@vm/{{ vm_name }}/{{ vm_namespace }}
+        -i {{ ssh_key_path }} -t '{{ ssh_opts }}'
+        -c 'cat ~/text 2>/dev/null || echo __missing__'"
       register: r_text_file
+      changed_when: false
       ignore_errors: true
 
     # -------------------------------------------------------
@@ -125,7 +98,6 @@
           }}
         _task4_ok: >-
           {{
-            bastion_pod is defined and
             r_text_file is defined and
             r_text_file is not failed and
             r_text_file is not skipped and

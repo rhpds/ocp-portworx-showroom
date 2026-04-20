@@ -16,57 +16,26 @@
     # Step 1 — Write data to VM to verify persistence through migration/HA
     # ------------------------------------------------------------------
 
-    - name: Find bastion pod (showroom wetty)
-      kubernetes.core.k8s_info:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        kind: Pod
-        namespace: "showroom-{{ guid }}"
-        label_selectors:
-          - "app.kubernetes.io/name=showroom"
-      register: r_bastion_pod
-      ignore_errors: true
-
-    - name: Set bastion pod name
-      ansible.builtin.set_fact:
-        bastion_pod: >-
-          {{
-            (r_bastion_pod.resources
-             | selectattr('status.phase', 'equalto', 'Running')
-             | list | first).metadata.name
-          }}
-      when: >-
-        r_bastion_pod.resources | default([])
-        | selectattr('status.phase', 'equalto', 'Running')
-        | list | length > 0
-
     - name: Write 'Red Hat was here' to ~/text inside VM (via bastion)
-      kubernetes.core.k8s_exec:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: "showroom-{{ guid }}"
-        pod: "{{ bastion_pod }}"
-        container: wetty
-        command: >-
-          sh -c 'virtctl ssh cloud-user@vm/{{ vm_name }}/{{ vm_namespace }}
-          -i {{ ssh_key_path }}
-          -t "{{ ssh_opts }}"
-          -c "echo \"Red Hat was here\" > ~/text && echo written"'
-      when: bastion_pod is defined
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
+        {{ bastion_user }}@{{ bastion_host }}
+        "virtctl ssh cloud-user@vm/{{ vm_name }}/{{ vm_namespace }}
+        -i {{ ssh_key_path }} -t '{{ ssh_opts }}'
+        -c 'echo \"Red Hat was here\" > ~/text && echo written'"
       register: r_write_text
+      changed_when: "'written' in r_write_text.stdout"
       ignore_errors: true
 
     - name: Verify text file written to VM
-      kubernetes.core.k8s_exec:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: "showroom-{{ guid }}"
-        pod: "{{ bastion_pod }}"
-        container: wetty
-        command: >-
-          sh -c 'virtctl ssh cloud-user@vm/{{ vm_name }}/{{ vm_namespace }}
-          -i {{ ssh_key_path }}
-          -t "{{ ssh_opts }}"
-          -c "cat ~/text"'
-      when: bastion_pod is defined
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
+        {{ bastion_user }}@{{ bastion_host }}
+        "virtctl ssh cloud-user@vm/{{ vm_name }}/{{ vm_namespace }}
+        -i {{ ssh_key_path }} -t '{{ ssh_opts }}'
+        -c 'cat ~/text'"
       register: r_verify_text_initial
+      changed_when: false
       ignore_errors: true
 
     # ------------------------------------------------------------------
@@ -83,7 +52,6 @@
 
     # ------------------------------------------------------------------
     # prose-02 — Trigger live migration via VirtualMachineInstanceMigration CRD
-    # (replaces Console UI: Actions → Migrate)
     # ------------------------------------------------------------------
 
     - name: Delete any existing VMIM for idempotency
@@ -162,24 +130,18 @@
     # ------------------------------------------------------------------
 
     - name: Verify text file persists after live migration (via bastion)
-      kubernetes.core.k8s_exec:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: "showroom-{{ guid }}"
-        pod: "{{ bastion_pod }}"
-        container: wetty
-        command: >-
-          sh -c 'virtctl ssh cloud-user@vm/{{ vm_name }}/{{ vm_namespace }}
-          -i {{ ssh_key_path }}
-          -t "{{ ssh_opts }}"
-          -c "cat ~/text"'
-      when: bastion_pod is defined
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
+        {{ bastion_user }}@{{ bastion_host }}
+        "virtctl ssh cloud-user@vm/{{ vm_name }}/{{ vm_namespace }}
+        -i {{ ssh_key_path }} -t '{{ ssh_opts }}'
+        -c 'cat ~/text'"
       register: r_verify_text_post_migration
+      changed_when: false
       ignore_errors: true
 
     # ------------------------------------------------------------------
     # Step 3 — HA: Induce node failure (reboot node running the VM)
-    # WARNING: intentionally destructive — reboots a cluster worker node.
-    # The showroom pod may restart if it runs on the same node.
     # ------------------------------------------------------------------
 
     - name: Get running virt-launcher pod to find VM node
@@ -208,25 +170,18 @@
         | list | length > 0
       ignore_errors: true
 
-    # WARNING: This reboots the worker node. The showroom pod may be killed.
-    # The runner pod (in a different namespace) should survive.
-    # We use oc debug with a one-shot command to avoid interactive session.
     - name: >-
         WARNING - Reboot worker node hosting VM (intentionally destructive HA test)
-      kubernetes.core.k8s_exec:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: "showroom-{{ guid }}"
-        pod: "{{ bastion_pod }}"
-        container: wetty
-        command: >-
-          sh -c 'oc debug node/{{ vm_node }}
-          --to-namespace={{ vm_namespace }}
-          -- chroot /host reboot &
-          sleep 5 && echo "reboot-triggered"'
-      when:
-        - bastion_pod is defined
-        - vm_node is defined
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
+        {{ bastion_user }}@{{ bastion_host }}
+        "oc debug node/{{ vm_node }}
+        --to-namespace={{ vm_namespace }}
+        -- chroot /host reboot &
+        sleep 5 && echo reboot-triggered"
+      when: vm_node is defined
       register: r_reboot
+      changed_when: "'reboot-triggered' in (r_reboot.stdout | default(''))"
       ignore_errors: true
 
     # ------------------------------------------------------------------
@@ -251,55 +206,18 @@
       ignore_errors: true
 
     # ------------------------------------------------------------------
-    # Refresh bastion pod after potential showroom restart
-    # ------------------------------------------------------------------
-
-    - name: Re-discover bastion pod after potential showroom restart
-      kubernetes.core.k8s_info:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        kind: Pod
-        namespace: "showroom-{{ guid }}"
-        label_selectors:
-          - "app.kubernetes.io/name=showroom"
-      register: r_bastion_pod_refresh
-      until: >-
-        r_bastion_pod_refresh.resources | default([])
-        | selectattr('status.phase', 'equalto', 'Running')
-        | list | length > 0
-      retries: 30
-      delay: 10
-      ignore_errors: true
-
-    - name: Refresh bastion pod name after potential restart
-      ansible.builtin.set_fact:
-        bastion_pod: >-
-          {{
-            (r_bastion_pod_refresh.resources
-             | selectattr('status.phase', 'equalto', 'Running')
-             | list | first).metadata.name
-          }}
-      when: >-
-        r_bastion_pod_refresh.resources | default([])
-        | selectattr('status.phase', 'equalto', 'Running')
-        | list | length > 0
-
-    # ------------------------------------------------------------------
     # block-12 — Verify data persistence after HA node reboot
     # ------------------------------------------------------------------
 
     - name: Verify text file persists after HA node reboot (via bastion)
-      kubernetes.core.k8s_exec:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: "showroom-{{ guid }}"
-        pod: "{{ bastion_pod }}"
-        container: wetty
-        command: >-
-          sh -c 'virtctl ssh cloud-user@vm/{{ vm_name }}/{{ vm_namespace }}
-          -i {{ ssh_key_path }}
-          -t "{{ ssh_opts }}"
-          -c "cat ~/text"'
-      when: bastion_pod is defined
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
+        {{ bastion_user }}@{{ bastion_host }}
+        "virtctl ssh cloud-user@vm/{{ vm_name }}/{{ vm_namespace }}
+        -i {{ ssh_key_path }} -t '{{ ssh_opts }}'
+        -c 'cat ~/text'"
       register: r_verify_text_post_ha
+      changed_when: false
       ignore_errors: true
 
     # ------------------------------------------------------------------

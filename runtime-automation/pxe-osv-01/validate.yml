@@ -153,36 +153,16 @@
       ignore_errors: true
 
     # -------------------------------------------------------
-    # Check 12 - virtctl binary exists on bastion (via wetty pod exec)
+    # Check 12 - virtctl binary exists on bastion (via SSH)
     # -------------------------------------------------------
-    - name: Find showroom pod for bastion shell access
-      kubernetes.core.k8s_info:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        kind: Pod
-        namespace: "showroom-{{ guid }}"
-        label_selectors:
-          - app.kubernetes.io/name=showroom
-      register: r_wetty_pods
-      ignore_errors: true
-
-    - name: Set showroom pod name
-      ansible.builtin.set_fact:
-        wetty_pod: >-
-          {{ (r_wetty_pods.resources | default([]) |
-          selectattr('status.phase', 'equalto', 'Running') |
-          list | first).metadata.name | default('') }}
-
-    - name: Check virtctl binary on bastion via showroom pod
-      kubernetes.core.k8s_exec:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: "showroom-{{ guid }}"
-        pod: "{{ wetty_pod }}"
-        container: wetty
-        command: >-
-          ssh -o StrictHostKeyChecking=no lab-user@localhost
-          "test -f /usr/local/bin/virtctl && echo exists || echo missing"
+    - name: Check virtctl binary on bastion via SSH
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh
+        -o StrictHostKeyChecking=no
+        {{ bastion_user }}@{{ bastion_host }}
+        "test -f /usr/local/bin/virtctl && echo exists || echo missing"
       register: r_virtctl
-      when: wetty_pod | length > 0
+      changed_when: false
       ignore_errors: true
 
     # -------------------------------------------------------
