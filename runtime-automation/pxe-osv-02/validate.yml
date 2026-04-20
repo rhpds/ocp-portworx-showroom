@@ -1,0 +1,92 @@
+---
+- name: pxe-osv-02 Validation - Create virtual machines
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    student_user: "{{ user | default('') }}"
+    vm_namespace: vmtest
+    vm_name: centos-stream9-example
+    vm_dv_name: centos-stream9-example-ds-centos-stream9
+    secret_name: authorized-keys
+
+  tasks:
+    # -------------------------------------------------------
+    # Check 1 — Namespace vmtest exists
+    # -------------------------------------------------------
+    - name: Check Namespace vmtest
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: v1
+        kind: Namespace
+        name: "{{ vm_namespace }}"
+      register: r_namespace
+      ignore_errors: true
+
+    # -------------------------------------------------------
+    # Check 2 — Secret authorized-keys exists with SSH public key
+    # -------------------------------------------------------
+    - name: Check Secret authorized-keys in vmtest
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: v1
+        kind: Secret
+        name: "{{ secret_name }}"
+        namespace: "{{ vm_namespace }}"
+      register: r_secret
+      ignore_errors: true
+
+    # -------------------------------------------------------
+    # Check 3 — VirtualMachine centos-stream9-example exists
+    # -------------------------------------------------------
+    - name: Check VirtualMachine centos-stream9-example
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        name: "{{ vm_name }}"
+        namespace: "{{ vm_namespace }}"
+      register: r_vm
+      ignore_errors: true
+
+    # -------------------------------------------------------
+    # Check 4 — VirtualMachine Ready AND DataVolume Succeeded
+    # Both are async — student may need to click Validate again.
+    # -------------------------------------------------------
+    - name: Check DataVolume phase
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: cdi.kubevirt.io/v1beta1
+        kind: DataVolume
+        name: "{{ vm_dv_name }}"
+        namespace: "{{ vm_namespace }}"
+      register: r_dv
+      ignore_errors: true
+
+    # -------------------------------------------------------
+    # Build results
+    # -------------------------------------------------------
+    - name: Build task results
+      ansible.builtin.set_fact:
+        _task1_ok: "{{ r_namespace.resources | default([]) | length > 0 }}"
+        _task2_ok: >-
+          {{ r_secret.resources | default([]) | length > 0 and
+             (r_secret.resources | default([{}]) | first).data | default({}) | length > 0 }}
+        _task3_ok: "{{ r_vm.resources | default([]) | length > 0 }}"
+        _task4_ok: >-
+          {{ (r_vm.resources | default([{}]) | first).status.ready | default(false) | bool and
+             (r_dv.resources | default([{}]) | first).status.phase | default('') == 'Succeeded' }}
+
+    - name: Validate all tasks
+      rhpds.ftl.validation_check:
+        check: "{{ _task1_ok and _task2_ok and _task3_ok and _task4_ok }}"
+        pass_msg: |
+          Task 1: Namespace vmtest exists
+          Task 2: Secret authorized-keys exists with SSH public key
+          Task 3: VirtualMachine centos-stream9-example created
+          Task 4: VirtualMachine is Ready and DataVolume import Succeeded
+        error_msg: |
+          {{ 'Task 1: Namespace vmtest exists' if _task1_ok else 'Task 1: FAILED — Namespace vmtest not found. Run: oc create ns vmtest' }}
+          {{ 'Task 2: Secret authorized-keys exists' if _task2_ok else 'Task 2: FAILED — Secret authorized-keys missing or empty in vmtest. Generate an SSH key and re-create the Secret.' }}
+          {{ 'Task 3: VirtualMachine centos-stream9-example created' if _task3_ok else 'Task 3: FAILED — VirtualMachine centos-stream9-example not found in vmtest. Apply the VM manifest from the lab instructions.' }}
+          {{ 'Task 4: VM Ready and DataVolume Succeeded' if _task4_ok else 'Task 4: VM still starting or DataVolume import still in progress — wait a few minutes and click Validate again.' }}

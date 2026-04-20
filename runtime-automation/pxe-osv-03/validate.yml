@@ -1,0 +1,153 @@
+---
+- name: pxe-osv-03 Live Migrations and High Availability Validation
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    student_user: "{{ user | default('') }}"
+    vm_name: centos-stream9-example
+    vm_namespace: vmtest
+    ssh_key_path: ~/.ssh/id_rsa
+    ssh_opts: "-o StrictHostKeyChecking=no"
+
+  tasks:
+
+    # -------------------------------------------------------
+    # Check 1 — PVC in vmtest has ReadWriteMany access mode
+    # -------------------------------------------------------
+    - name: Get PVCs in vmtest namespace
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        kind: PersistentVolumeClaim
+        namespace: "{{ vm_namespace }}"
+      register: r_pvcs
+      ignore_errors: true
+
+    # -------------------------------------------------------
+    # Check 2 — VM is Running (covers post-migration + post-HA)
+    # -------------------------------------------------------
+    - name: Get VirtualMachine status in vmtest
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        name: "{{ vm_name }}"
+        namespace: "{{ vm_namespace }}"
+      register: r_vm
+      ignore_errors: true
+
+    # -------------------------------------------------------
+    # Check 3 — Live migration occurred (Completed virt-launcher pod exists)
+    # After a live migration the source virt-launcher pod is left in
+    # Succeeded phase — this is the durable evidence.
+    # Note: the student must perform migration (Step 2) before the HA reboot
+    # (Step 3), so the Succeeded pod persists even after the reboot.
+    # -------------------------------------------------------
+    - name: Get all virt-launcher pods in vmtest (including Completed)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        kind: Pod
+        namespace: "{{ vm_namespace }}"
+        label_selectors:
+          - "kubevirt.io=virt-launcher"
+      register: r_launcher_pods
+      ignore_errors: true
+
+    # -------------------------------------------------------
+    # Check 4 — ~/text contains "Red Hat was here" inside VM
+    # Proves: initial write AND persistence through migration AND through HA
+    # Uses virtctl ssh via the showroom bastion (wetty) pod
+    # -------------------------------------------------------
+    - name: Find running bastion pod (showroom wetty)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        kind: Pod
+        namespace: showroom
+        label_selectors:
+          - "app=wetty"
+      register: r_bastion_pod
+      ignore_errors: true
+
+    - name: Set bastion pod name
+      ansible.builtin.set_fact:
+        bastion_pod: >-
+          {{
+            (r_bastion_pod.resources
+             | selectattr('status.phase', 'equalto', 'Running')
+             | list | first).metadata.name
+          }}
+      when: >-
+        r_bastion_pod.resources | default([])
+        | selectattr('status.phase', 'equalto', 'Running')
+        | list | length > 0
+
+    - name: Read ~/text from VM via bastion (virtctl ssh)
+      kubernetes.core.k8s_exec:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        namespace: showroom
+        pod: "{{ bastion_pod }}"
+        command: >-
+          sh -c 'virtctl ssh cloud-user@vm/{{ vm_name }}/{{ vm_namespace }}
+          -i {{ ssh_key_path }}
+          -t "{{ ssh_opts }}"
+          -c "cat ~/text 2>/dev/null || echo __missing__"'
+      when: bastion_pod is defined
+      register: r_text_file
+      ignore_errors: true
+
+    # -------------------------------------------------------
+    # Build result facts
+    # -------------------------------------------------------
+    - name: Build task results
+      ansible.builtin.set_fact:
+        _task1_ok: >-
+          {{
+            r_pvcs.resources | default([])
+            | selectattr('spec.accessModes', 'defined')
+            | selectattr('spec.accessModes', 'contains', 'ReadWriteMany')
+            | list | length > 0
+          }}
+        _task2_ok: >-
+          {{
+            r_vm.resources | default([]) | length > 0 and
+            (r_vm.resources | first).status.printableStatus | default('') == 'Running'
+          }}
+        _task3_ok: >-
+          {{
+            (r_launcher_pods.resources | default([])
+             | selectattr('status.phase', 'equalto', 'Succeeded')
+             | list | length > 0)
+            or
+            (r_launcher_pods.resources | default([])
+             | selectattr('status.phase', 'equalto', 'Failed')
+             | list | length > 0)
+          }}
+        _task4_ok: >-
+          {{
+            bastion_pod is defined and
+            r_text_file is defined and
+            r_text_file is not failed and
+            r_text_file is not skipped and
+            'Red Hat was here' in (r_text_file.stdout | default(''))
+          }}
+
+    # -------------------------------------------------------
+    # Validate all tasks
+    # -------------------------------------------------------
+    - name: Validate all tasks
+      rhpds.ftl.validation_check:
+        check: "{{ _task1_ok and _task2_ok and _task3_ok and _task4_ok }}"
+        pass_msg: |
+          Task 1: PVC has ReadWriteMany access mode (Portworx shared volume confirmed)
+          Task 2: VM centos-stream9-example is Running
+          Task 3: Live migration occurred (non-Running virt-launcher pod found as evidence)
+          Task 4: ~/text contains "Red Hat was here" (data persisted through migration and HA)
+        error_msg: |
+          {{ '[OK]' if _task1_ok else '[FAILED]' }} Task 1: PVC ReadWriteMany — \
+          {{ 'found' if _task1_ok else 'not found — ensure the VM was created with a Portworx PVC (Step 2)' }}
+          {{ '[OK]' if _task2_ok else '[FAILED]' }} Task 2: VM Running — \
+          {{ 'confirmed' if _task2_ok else 'VM is not Running — run: oc get vm -n vmtest and wait for recovery after the HA reboot' }}
+          {{ '[OK]' if _task3_ok else '[FAILED]' }} Task 3: Live migration evidence — \
+          {{ 'found (prior virt-launcher pod exists)' if _task3_ok else 'no prior virt-launcher pod found — complete the live migration via Actions > Migrate in the console before triggering the HA reboot' }}
+          {{ '[OK]' if _task4_ok else '[FAILED]' }} Task 4: ~/text content — \
+          {{ '"Red Hat was here" confirmed' if _task4_ok else 'file missing or wrong content — run Step 1 to write the file; if the VM rebooted after the HA event re-run Solve to restore it' }}

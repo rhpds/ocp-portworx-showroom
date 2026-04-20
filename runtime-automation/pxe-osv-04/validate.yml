@@ -1,0 +1,151 @@
+---
+- name: pxe-osv-04 Validation - Virtual Machine Snapshots
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    student_user: "{{ user | default('') }}"
+    vm_name: centos-stream9-example
+    vm_namespace: vmtest
+    snapshot_name: centos-stream9-example-snapshot-ftl
+    restore_name: centos-stream9-example-restore-ftl
+
+  tasks:
+
+    # -------------------------------------------------------
+    # Check 1 - VolumeSnapshotClass px-csi-snapclass exists
+    # -------------------------------------------------------
+    - name: Check VolumeSnapshotClass px-csi-snapclass exists
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: snapshot.storage.k8s.io/v1
+        kind: VolumeSnapshotClass
+        name: px-csi-snapclass
+      register: r_snapclass
+      ignore_errors: true
+
+    # -------------------------------------------------------
+    # Check 2 - VirtualMachineSnapshot exists and is readyToUse
+    # -------------------------------------------------------
+    - name: Check VirtualMachineSnapshot readyToUse
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: snapshot.kubevirt.io/v1beta1
+        kind: VirtualMachineSnapshot
+        name: "{{ snapshot_name }}"
+        namespace: "{{ vm_namespace }}"
+      register: r_snapshot
+      ignore_errors: true
+
+    # -------------------------------------------------------
+    # Check 3 - VirtualMachineRestore exists and is complete
+    # -------------------------------------------------------
+    - name: Check VirtualMachineRestore complete
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: snapshot.kubevirt.io/v1beta1
+        kind: VirtualMachineRestore
+        name: "{{ restore_name }}"
+        namespace: "{{ vm_namespace }}"
+      register: r_restore
+      ignore_errors: true
+
+    # -------------------------------------------------------
+    # Check 4 - VM is Running after restore
+    # -------------------------------------------------------
+    - name: Check VirtualMachineInstance is Running
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: kubevirt.io/v1
+        kind: VirtualMachineInstance
+        name: "{{ vm_name }}"
+        namespace: "{{ vm_namespace }}"
+      register: r_vmi
+      ignore_errors: true
+
+    # -------------------------------------------------------
+    # Check 5 - /etc/fstab is present in VM (restored)
+    # Only run when a virt-launcher pod is available
+    # -------------------------------------------------------
+    - name: Find running virt-launcher pod
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        kind: Pod
+        namespace: "{{ vm_namespace }}"
+        label_selectors:
+          - "vm.kubevirt.io/name={{ vm_name }}"
+      register: r_virt_pods
+      ignore_errors: true
+
+    - name: Set virt-launcher pod name
+      ansible.builtin.set_fact:
+        virt_launcher_pod: >-
+          {{ (r_virt_pods.resources
+              | selectattr('status.phase', 'equalto', 'Running')
+              | list | first).metadata.name }}
+      when: >-
+        r_virt_pods.resources | default([]) |
+        selectattr('status.phase', 'equalto', 'Running') | list | length > 0
+
+    - name: Check /etc/fstab exists in restored VM
+      kubernetes.core.k8s_exec:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        namespace: "{{ vm_namespace }}"
+        pod: "{{ virt_launcher_pod }}"
+        container: compute
+        command: "sh -c 'test -f /etc/fstab && echo FSTAB_OK || echo FSTAB_MISSING'"
+      register: r_fstab
+      when: virt_launcher_pod is defined
+      ignore_errors: true
+
+    # -------------------------------------------------------
+    # Build results
+    # -------------------------------------------------------
+    - name: Build task results
+      ansible.builtin.set_fact:
+        _task1_ok: >-
+          {{ r_snapclass.resources | default([]) | length > 0 and
+             (r_snapclass.resources[0].driver | default('')) == 'pxd.portworx.com' }}
+        _task2_ok: >-
+          {{ r_snapshot.resources | default([]) | length > 0 and
+             (r_snapshot.resources[0].status.readyToUse | default(false)) == true }}
+        _task3_ok: >-
+          {{ r_restore.resources | default([]) | length > 0 and
+             (r_restore.resources[0].status.complete | default(false)) == true }}
+        _task4_ok: >-
+          {{ r_vmi.resources | default([]) | length > 0 and
+             (r_vmi.resources[0].status.phase | default('')) == 'Running' }}
+        _task5_ok: >-
+          {{ virt_launcher_pod is defined and
+             r_fstab is not skipped and
+             r_fstab is not failed and
+             'FSTAB_OK' in (r_fstab.stdout | default('')) }}
+
+    # -------------------------------------------------------
+    # Validate all tasks
+    # -------------------------------------------------------
+    - name: Validate all tasks
+      rhpds.ftl.validation_check:
+        check: "{{ _task1_ok and _task2_ok and _task3_ok and _task4_ok and _task5_ok }}"
+        pass_msg: |
+          Task 1: VolumeSnapshotClass px-csi-snapclass created with Portworx driver
+          Task 2: VirtualMachineSnapshot {{ snapshot_name }} is ready to use
+          Task 3: VirtualMachineRestore {{ restore_name }} completed successfully
+          Task 4: VM {{ vm_name }} is running after restore
+          Task 5: /etc/fstab is present in the restored VM
+        error_msg: |
+          {{ '[OK]' if _task1_ok else '[FAILED]' }} Task 1: VolumeSnapshotClass px-csi-snapclass \
+          {{ 'exists with pxd.portworx.com driver' if _task1_ok else
+             'missing or wrong driver — run: oc apply -f the VolumeSnapshotClass manifest in the lab' }}
+          {{ '[OK]' if _task2_ok else '[FAILED]' }} Task 2: VirtualMachineSnapshot {{ snapshot_name }} \
+          {{ 'is ready' if _task2_ok else
+             'not found or not ready — take a snapshot of centos-stream9-example from the Snapshots tab' }}
+          {{ '[OK]' if _task3_ok else '[FAILED]' }} Task 3: VirtualMachineRestore {{ restore_name }} \
+          {{ 'complete' if _task3_ok else
+             'not found or incomplete — stop the VM then restore from snapshot via the Snapshots tab' }}
+          {{ '[OK]' if _task4_ok else '[FAILED]' }} Task 4: VM {{ vm_name }} \
+          {{ 'is Running' if _task4_ok else
+             'is not Running — start the VM from Actions > Start after restore completes' }}
+          {{ '[OK]' if _task5_ok else '[FAILED]' }} Task 5: /etc/fstab in restored VM \
+          {{ 'is present (restore verified)' if _task5_ok else
+             'is missing or VM not accessible — ensure restore completed and VM is fully booted' }}

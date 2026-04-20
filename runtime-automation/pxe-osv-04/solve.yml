@@ -1,0 +1,315 @@
+---
+- name: pxe-osv-04 Solve - Virtual Machine Snapshots
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    vm_name: centos-stream9-example
+    vm_namespace: vmtest
+    snapshot_name: centos-stream9-example-snapshot-ftl
+    restore_name: centos-stream9-example-restore-ftl
+    ssh_user: cloud-user
+
+  tasks:
+
+    # ---------------------------------------------------------------
+    # Task 1: Create VolumeSnapshotClass
+    # ---------------------------------------------------------------
+    - name: Create VolumeSnapshotClass px-csi-snapclass
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        state: present
+        definition:
+          apiVersion: snapshot.storage.k8s.io/v1
+          kind: VolumeSnapshotClass
+          metadata:
+            name: px-csi-snapclass
+            annotations:
+              snapshot.storage.kubernetes.io/is-default-class: "true"
+          driver: pxd.portworx.com
+          deletionPolicy: Delete
+          parameters:
+            csi.openstorage.org/snapshot-type: local
+      ignore_errors: true
+
+    # ---------------------------------------------------------------
+    # Task 2 (prose): Take snapshot via VirtualMachineSnapshot CRD
+    # ---------------------------------------------------------------
+    - name: Check if snapshot already exists
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: snapshot.kubevirt.io/v1beta1
+        kind: VirtualMachineSnapshot
+        name: "{{ snapshot_name }}"
+        namespace: "{{ vm_namespace }}"
+      register: r_snapshot_check
+      ignore_errors: true
+
+    - name: Create VirtualMachineSnapshot
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        state: present
+        definition:
+          apiVersion: snapshot.kubevirt.io/v1beta1
+          kind: VirtualMachineSnapshot
+          metadata:
+            name: "{{ snapshot_name }}"
+            namespace: "{{ vm_namespace }}"
+          spec:
+            source:
+              apiGroup: kubevirt.io
+              kind: VirtualMachine
+              name: "{{ vm_name }}"
+      when: >-
+        r_snapshot_check.resources | default([]) | length == 0
+      ignore_errors: true
+
+    - name: Wait for snapshot to be ready
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: snapshot.kubevirt.io/v1beta1
+        kind: VirtualMachineSnapshot
+        name: "{{ snapshot_name }}"
+        namespace: "{{ vm_namespace }}"
+      register: r_snapshot
+      until: >-
+        r_snapshot.resources | default([]) | length > 0 and
+        (r_snapshot.resources[0].status.readyToUse | default(false)) == true
+      retries: 30
+      delay: 10
+      ignore_errors: true
+
+    # ---------------------------------------------------------------
+    # Task 3 (block-02): Delete /etc/fstab in the VM
+    # INTENTIONALLY DESTRUCTIVE — simulates accidental data loss.
+    # Guard: skip if /etc/fstab is already absent.
+    # Uses k8s_exec into virt-launcher pod (no SSH key required).
+    # ---------------------------------------------------------------
+    - name: Find virt-launcher pod for VM
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        kind: Pod
+        namespace: "{{ vm_namespace }}"
+        label_selectors:
+          - "vm.kubevirt.io/name={{ vm_name }}"
+      register: r_virt_pods
+      ignore_errors: true
+
+    - name: Set virt-launcher pod name
+      ansible.builtin.set_fact:
+        virt_launcher_pod: >-
+          {{ (r_virt_pods.resources
+              | selectattr('status.phase', 'equalto', 'Running')
+              | list | first).metadata.name }}
+      when: >-
+        r_virt_pods.resources | default([]) |
+        selectattr('status.phase', 'equalto', 'Running') | list | length > 0
+
+    - name: Check if /etc/fstab exists in VM guest
+      kubernetes.core.k8s_exec:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        namespace: "{{ vm_namespace }}"
+        pod: "{{ virt_launcher_pod }}"
+        container: compute
+        command: "sh -c 'test -f /etc/fstab && echo EXISTS || echo ABSENT'"
+      register: r_fstab_check
+      when: virt_launcher_pod is defined
+      ignore_errors: true
+
+    # INTENTIONALLY DESTRUCTIVE: deletes /etc/fstab to simulate data loss.
+    # Skipped when /etc/fstab is already absent (idempotency guard).
+    - name: Delete /etc/fstab in VM guest (simulate data loss)
+      kubernetes.core.k8s_exec:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        namespace: "{{ vm_namespace }}"
+        pod: "{{ virt_launcher_pod }}"
+        container: compute
+        command: "sh -c 'sudo rm -f /etc/fstab && echo DELETED'"
+      when:
+        - virt_launcher_pod is defined
+        - r_fstab_check.stdout | default('') is search('EXISTS')
+      ignore_errors: true
+
+    - name: Verify /etc/fstab is absent (block-03 equivalent)
+      kubernetes.core.k8s_exec:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        namespace: "{{ vm_namespace }}"
+        pod: "{{ virt_launcher_pod }}"
+        container: compute
+        command: "sh -c 'test -f /etc/fstab && echo EXISTS || echo ABSENT'"
+      register: r_fstab_absent
+      when: virt_launcher_pod is defined
+      ignore_errors: true
+
+    # ---------------------------------------------------------------
+    # Task 4 (prose-03a): Stop VM before restore
+    # ---------------------------------------------------------------
+    - name: Stop VM
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        state: present
+        definition:
+          apiVersion: kubevirt.io/v1
+          kind: VirtualMachine
+          metadata:
+            name: "{{ vm_name }}"
+            namespace: "{{ vm_namespace }}"
+          spec:
+            running: false
+      ignore_errors: true
+
+    - name: Wait for VM to stop (VMI gone)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: kubevirt.io/v1
+        kind: VirtualMachineInstance
+        name: "{{ vm_name }}"
+        namespace: "{{ vm_namespace }}"
+      register: r_vmi
+      until: r_vmi.resources | default([]) | length == 0
+      retries: 30
+      delay: 10
+      ignore_errors: true
+
+    # ---------------------------------------------------------------
+    # Task 4 (prose-03b): Restore from snapshot
+    # ---------------------------------------------------------------
+    - name: Check if restore object already exists
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: snapshot.kubevirt.io/v1beta1
+        kind: VirtualMachineRestore
+        name: "{{ restore_name }}"
+        namespace: "{{ vm_namespace }}"
+      register: r_restore_check
+      ignore_errors: true
+
+    - name: Create VirtualMachineRestore
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        state: present
+        definition:
+          apiVersion: snapshot.kubevirt.io/v1beta1
+          kind: VirtualMachineRestore
+          metadata:
+            name: "{{ restore_name }}"
+            namespace: "{{ vm_namespace }}"
+          spec:
+            target:
+              apiGroup: kubevirt.io
+              kind: VirtualMachine
+              name: "{{ vm_name }}"
+            virtualMachineSnapshotName: "{{ snapshot_name }}"
+      when: >-
+        r_restore_check.resources | default([]) | length == 0 or
+        (r_restore_check.resources[0].status.complete | default(false)) == false
+      ignore_errors: true
+
+    - name: Wait for restore to complete
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: snapshot.kubevirt.io/v1beta1
+        kind: VirtualMachineRestore
+        name: "{{ restore_name }}"
+        namespace: "{{ vm_namespace }}"
+      register: r_restore
+      until: >-
+        r_restore.resources | default([]) | length > 0 and
+        (r_restore.resources[0].status.complete | default(false)) == true
+      retries: 30
+      delay: 10
+      ignore_errors: true
+
+    # ---------------------------------------------------------------
+    # Task 4 (prose-03c): Start VM after restore
+    # ---------------------------------------------------------------
+    - name: Start VM after restore
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        state: present
+        definition:
+          apiVersion: kubevirt.io/v1
+          kind: VirtualMachine
+          metadata:
+            name: "{{ vm_name }}"
+            namespace: "{{ vm_namespace }}"
+          spec:
+            running: true
+      ignore_errors: true
+
+    - name: Wait for VMI to be running
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        api_version: kubevirt.io/v1
+        kind: VirtualMachineInstance
+        name: "{{ vm_name }}"
+        namespace: "{{ vm_namespace }}"
+      register: r_vmi_running
+      until: >-
+        r_vmi_running.resources | default([]) | length > 0 and
+        (r_vmi_running.resources[0].status.phase | default('')) == 'Running'
+      retries: 36
+      delay: 10
+      ignore_errors: true
+
+    # ---------------------------------------------------------------
+    # Task 5 (block-04): Verify /etc/fstab is restored
+    # Wait for virt-launcher pod to be ready again, then check.
+    # ---------------------------------------------------------------
+    - name: Wait for virt-launcher pod to be running after restore
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        kind: Pod
+        namespace: "{{ vm_namespace }}"
+        label_selectors:
+          - "vm.kubevirt.io/name={{ vm_name }}"
+      register: r_virt_pods_post
+      until: >-
+        r_virt_pods_post.resources | default([]) |
+        selectattr('status.phase', 'equalto', 'Running') | list | length > 0
+      retries: 36
+      delay: 10
+      ignore_errors: true
+
+    - name: Set virt-launcher pod name after restore
+      ansible.builtin.set_fact:
+        virt_launcher_pod_post: >-
+          {{ (r_virt_pods_post.resources
+              | selectattr('status.phase', 'equalto', 'Running')
+              | list | first).metadata.name }}
+      when: >-
+        r_virt_pods_post.resources | default([]) |
+        selectattr('status.phase', 'equalto', 'Running') | list | length > 0
+
+    - name: Verify /etc/fstab is present after restore (block-04)
+      kubernetes.core.k8s_exec:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        namespace: "{{ vm_namespace }}"
+        pod: "{{ virt_launcher_pod_post }}"
+        container: compute
+        command: "sh -c 'cat /etc/fstab && echo FSTAB_OK || echo FSTAB_MISSING'"
+      register: r_fstab_restored
+      when: virt_launcher_pod_post is defined
+      ignore_errors: true
+
+    # ---------------------------------------------------------------
+    # Report
+    # ---------------------------------------------------------------
+    - name: Report solve status
+      ansible.builtin.debug:
+        msg: |
+          VolumeSnapshotClass px-csi-snapclass: created
+          VirtualMachineSnapshot {{ snapshot_name }}: {{
+            'ready' if (r_snapshot.resources | default([]) | length > 0 and
+                        r_snapshot.resources[0].status.readyToUse | default(false))
+            else 'NOT ready' }}
+          /etc/fstab deleted (data loss simulated): {{
+            'yes' if (r_fstab_absent.stdout | default('') is search('ABSENT'))
+            else 'skipped (already absent or pod not found)' }}
+          VirtualMachineRestore complete: {{
+            'yes' if (r_restore.resources | default([]) | length > 0 and
+                      r_restore.resources[0].status.complete | default(false))
+            else 'NOT complete' }}
+          /etc/fstab restored: {{
+            'yes' if (r_fstab_restored.stdout | default('') is search('FSTAB_OK'))
+            else 'NOT restored — check virt-launcher pod' }}
