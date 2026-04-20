@@ -180,9 +180,7 @@
         msg: "Initial data PVC size: {{ pvc_initial_size | default('unknown') }}"
 
     # ------------------------------------------------------------------
-    # block-05: Wait for VMI to be Running, then partition/format/mount
-    # The lab runs virtctl ssh from the bastion; here we use the runner
-    # pod which has virtctl available via oc/kubectl plugin path.
+    # block-05: Wait for VMI Running, then partition/format/mount via bastion
     # ------------------------------------------------------------------
     - name: Wait for VirtualMachineInstance to reach Running phase
       kubernetes.core.k8s_info:
@@ -199,8 +197,6 @@
       delay: 15
       ignore_errors: true
 
-    # Find the virt-launcher pod so we can use its node for virtctl routing,
-    # and confirm the VMI IP is ready before SSHing.
     - name: Wait for VMI to have a guest-agent-ready condition
       kubernetes.core.k8s_info:
         kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
@@ -218,105 +214,69 @@
       delay: 15
       ignore_errors: true
 
-    # Find the runner/wetty pod that has virtctl available
-    - name: Find zt-runner pod (has virtctl)
-      kubernetes.core.k8s_info:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        kind: Pod
-        namespace: "{{ student_user }}-runtime-automation"
-        label_selectors:
-          - "app=zt-runner"
-      register: r_runner_pods
-      ignore_errors: true
-
-    - name: Set runner pod name
-      ansible.builtin.set_fact:
-        runner_pod: >-
-          {{ (r_runner_pods.resources
-              | selectattr('status.phase', 'equalto', 'Running')
-              | list | first).metadata.name }}
-        runner_namespace: "{{ student_user }}-runtime-automation"
-      when: >-
-        r_runner_pods.resources | default([]) |
-        selectattr('status.phase', 'equalto', 'Running') | list | length > 0
-
-    # SSH retry loop: wait until the VM guest is reachable
     - name: Wait for VM SSH to become available (lsblk probe)
-      kubernetes.core.k8s_exec:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: "{{ runner_namespace }}"
-        pod: "{{ runner_pod }}"
-        command: >-
-          sh -c 'virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
-          -i {{ ssh_key_path }}
-          -t "{{ ssh_opts }}"
-          -c "lsblk" 2>&1 && echo SSH_OK'
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
+        {{ bastion_user }}@{{ bastion_host }}
+        "virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
+        -i {{ ssh_key_path }} -t '{{ ssh_opts }}'
+        -c 'lsblk' 2>&1 && echo SSH_OK"
       register: r_ssh_probe
       until: r_ssh_probe.stdout is defined and 'SSH_OK' in r_ssh_probe.stdout
       retries: 30
       delay: 10
-      when: runner_pod is defined
+      changed_when: false
       ignore_errors: true
 
-    # Partition, format, and mount /dev/vdb as /data
     - name: Partition, format, and mount data disk as /data in VM
-      kubernetes.core.k8s_exec:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: "{{ runner_namespace }}"
-        pod: "{{ runner_pod }}"
-        command: >-
-          sh -c 'virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
-          -i {{ ssh_key_path }}
-          -t "{{ ssh_opts }}"
-          -c "(echo g; echo n; echo 1; echo ; echo ; echo w) | sudo fdisk /dev/vdb
-          && sudo mkfs.ext4 /dev/vdb1
-          && sudo mkdir -p /data
-          && sudo mount /dev/vdb1 /data
-          && echo MOUNT_OK" 2>&1'
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
+        {{ bastion_user }}@{{ bastion_host }}
+        "virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
+        -i {{ ssh_key_path }} -t '{{ ssh_opts }}'
+        -c '(echo g; echo n; echo 1; echo ; echo ; echo w) | sudo fdisk /dev/vdb
+        && sudo mkfs.ext4 /dev/vdb1
+        && sudo mkdir -p /data
+        && sudo mount /dev/vdb1 /data
+        && echo MOUNT_OK' 2>&1"
       register: r_mount
-      when: runner_pod is defined
+      changed_when: "'MOUNT_OK' in (r_mount.stdout | default(''))"
       ignore_errors: true
 
     # ------------------------------------------------------------------
     # block-06: Fill disk with 4G of data to trigger Autopilot (slow)
     # ------------------------------------------------------------------
     - name: Fill data disk (shred 4G — takes up to 10 min)
-      kubernetes.core.k8s_exec:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: "{{ runner_namespace }}"
-        pod: "{{ runner_pod }}"
-        command: >-
-          sh -c 'virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
-          -i {{ ssh_key_path }}
-          -t "{{ ssh_opts }}"
-          -c "sudo touch /data/file; sudo shred -n 1 -s 4G /data/file && echo SHRED_DONE" 2>&1'
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
+        {{ bastion_user }}@{{ bastion_host }}
+        "virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
+        -i {{ ssh_key_path }} -t '{{ ssh_opts }}'
+        -c 'sudo touch /data/file; sudo shred -n 1 -s 4G /data/file && echo SHRED_DONE' 2>&1"
       register: r_shred
       async: 600
       poll: 30
-      when: runner_pod is defined
+      changed_when: "'SHRED_DONE' in (r_shred.stdout | default(''))"
       ignore_errors: true
 
     # ------------------------------------------------------------------
     # block-07: Wait for Autopilot ActiveActionsTaken event
-    # Autopilot can take 15-20 min to act — generous retries
     # ------------------------------------------------------------------
     - name: Wait for Autopilot ActiveActionsTaken event
-      kubernetes.core.k8s_exec:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: "{{ runner_namespace }}"
-        pod: "{{ runner_pod }}"
-        command: >-
-          sh -c 'oc get events
-          --field-selector involvedObject.kind=AutopilotRule,involvedObject.name={{ autopilot_rule_name }}
-          --all-namespaces --sort-by .lastTimestamp
-          -o custom-columns=MESSAGE:.message 2>&1'
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
+        {{ bastion_user }}@{{ bastion_host }}
+        "oc get events
+        --field-selector involvedObject.kind=AutopilotRule,involvedObject.name={{ autopilot_rule_name }}
+        --all-namespaces --sort-by .lastTimestamp
+        -o custom-columns=MESSAGE:.message 2>&1"
       register: r_autopilot_events
       until: >-
         r_autopilot_events.stdout is defined and
         'ActiveActionsTaken' in r_autopilot_events.stdout
       retries: 60
       delay: 30
-      when: runner_pod is defined
+      changed_when: false
       ignore_errors: true
 
     # ------------------------------------------------------------------
@@ -342,36 +302,30 @@
     # block-09: Resize the partition and filesystem inside the VM
     # ------------------------------------------------------------------
     - name: Resize partition and filesystem inside VM
-      kubernetes.core.k8s_exec:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: "{{ runner_namespace }}"
-        pod: "{{ runner_pod }}"
-        command: >-
-          sh -c 'virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
-          -i {{ ssh_key_path }}
-          -t "{{ ssh_opts }}"
-          -c "yes Fix | sudo parted --script --fix /dev/vdb print;
-          yes | sudo parted --pretend-input-tty /dev/vdb resizepart 1 100%;
-          sudo resize2fs /dev/vdb1 && echo RESIZE_OK" 2>&1'
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
+        {{ bastion_user }}@{{ bastion_host }}
+        "virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
+        -i {{ ssh_key_path }} -t '{{ ssh_opts }}'
+        -c 'yes Fix | sudo parted --script --fix /dev/vdb print;
+        yes | sudo parted --pretend-input-tty /dev/vdb resizepart 1 100%;
+        sudo resize2fs /dev/vdb1 && echo RESIZE_OK' 2>&1"
       register: r_resize
-      when: runner_pod is defined
+      changed_when: "'RESIZE_OK' in (r_resize.stdout | default(''))"
       ignore_errors: true
 
     # ------------------------------------------------------------------
     # block-10: Verify /data filesystem size inside VM (>= 9G)
     # ------------------------------------------------------------------
     - name: Check /data filesystem size inside VM
-      kubernetes.core.k8s_exec:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: "{{ runner_namespace }}"
-        pod: "{{ runner_pod }}"
-        command: >-
-          sh -c 'virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
-          -i {{ ssh_key_path }}
-          -t "{{ ssh_opts }}"
-          -c "df -h /data" 2>&1'
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
+        {{ bastion_user }}@{{ bastion_host }}
+        "virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
+        -i {{ ssh_key_path }} -t '{{ ssh_opts }}'
+        -c 'df -h /data' 2>&1"
       register: r_df
-      when: runner_pod is defined
+      changed_when: false
       ignore_errors: true
 
     - name: Parse /data size from df output

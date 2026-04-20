@@ -55,44 +55,18 @@
       ignore_errors: true
 
     # -------------------------------------------------------
-    # Check 4 — Autopilot ActiveActionsTaken event fired (async)
-    # Check 6 — /data mounted and shred file present in VM
-    # Check 7 — /data filesystem >= 9G inside VM
-    # All three require the zt-runner pod for virtctl/oc access
+    # Check 4 — Autopilot ActiveActionsTaken event fired
     # -------------------------------------------------------
-    - name: Find zt-runner pod
-      kubernetes.core.k8s_info:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        kind: Pod
-        namespace: "{{ student_user }}-runtime-automation"
-        label_selectors:
-          - "app=zt-runner"
-      register: r_runner_pods
-      ignore_errors: true
-
-    - name: Set runner pod fact
-      ansible.builtin.set_fact:
-        runner_pod: >-
-          {{ (r_runner_pods.resources
-              | selectattr('status.phase', 'equalto', 'Running')
-              | list | first).metadata.name }}
-        runner_namespace: "{{ student_user }}-runtime-automation"
-      when: >-
-        r_runner_pods.resources | default([]) |
-        selectattr('status.phase', 'equalto', 'Running') | list | length > 0
-
     - name: Check Autopilot ActiveActionsTaken event
-      kubernetes.core.k8s_exec:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: "{{ runner_namespace }}"
-        pod: "{{ runner_pod }}"
-        command: >-
-          sh -c 'oc get events
-          --field-selector involvedObject.kind=AutopilotRule,involvedObject.name={{ autopilot_rule_name }}
-          --all-namespaces --sort-by .lastTimestamp
-          -o custom-columns=MESSAGE:.message 2>&1'
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
+        {{ bastion_user }}@{{ bastion_host }}
+        "oc get events
+        --field-selector involvedObject.kind=AutopilotRule,involvedObject.name={{ autopilot_rule_name }}
+        --all-namespaces --sort-by .lastTimestamp
+        -o custom-columns=MESSAGE:.message 2>&1"
       register: r_autopilot_events
-      when: runner_pod is defined
+      changed_when: false
       ignore_errors: true
 
     # -------------------------------------------------------
@@ -115,38 +89,31 @@
 
     # -------------------------------------------------------
     # Check 6 — /data mounted and shred file exists in VM
-    # (covers block-05 partition/format/mount + block-06 shred)
     # -------------------------------------------------------
     - name: Check /data mount and shred file in VM
-      kubernetes.core.k8s_exec:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: "{{ runner_namespace }}"
-        pod: "{{ runner_pod }}"
-        command: >-
-          sh -c 'virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
-          -i {{ ssh_key_path }}
-          -t "{{ ssh_opts }}"
-          -c "mountpoint /data && test -f /data/file && echo DATA_READY || echo DATA_MISSING" 2>&1'
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
+        {{ bastion_user }}@{{ bastion_host }}
+        "virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
+        -i {{ ssh_key_path }} -t '{{ ssh_opts }}'
+        -c 'mountpoint /data && test -f /data/file && echo DATA_READY || echo DATA_MISSING' 2>&1"
       register: r_data_mount
-      when: runner_pod is defined
+      changed_when: false
       ignore_errors: true
 
     # -------------------------------------------------------
-    # Check 7 — /data filesystem >= 9G (covers block-09 resize + block-10 df)
+    # Check 7 — /data filesystem >= 9G
     # 9G = 9 * 1024 * 1024 = 9437184 1K-blocks
     # -------------------------------------------------------
     - name: Check /data filesystem size in VM
-      kubernetes.core.k8s_exec:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: "{{ runner_namespace }}"
-        pod: "{{ runner_pod }}"
-        command: >-
-          sh -c 'virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
-          -i {{ ssh_key_path }}
-          -t "{{ ssh_opts }}"
-          -c "df /data | awk \"NR==2{print (\$2 >= 9437184) ? \"SIZE_OK\" : \"SIZE_SMALL\"}\"" 2>&1'
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
+        {{ bastion_user }}@{{ bastion_host }}
+        "virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
+        -i {{ ssh_key_path }} -t '{{ ssh_opts }}'
+        -c 'df /data | awk \"NR==2{print (\\\$2 >= 9437184) ? \\\"SIZE_OK\\\" : \\\"SIZE_SMALL\\\"}\"' 2>&1"
       register: r_df_check
-      when: runner_pod is defined
+      changed_when: false
       ignore_errors: true
 
     # -------------------------------------------------------
@@ -158,21 +125,18 @@
         _task2_ok: "{{ r_autopilot_rule.resources | default([]) | length > 0 }}"
         _task3_ok: "{{ r_pvc_label.resources | default([]) | length > 0 }}"
         _task4_ok: >-
-          {{ runner_pod is defined and
-             r_autopilot_events is not skipped and
+          {{ r_autopilot_events is not skipped and
              r_autopilot_events is not failed and
              'ActiveActionsTaken' in (r_autopilot_events.stdout | default('')) }}
         _task5_ok: >-
           {{ pvc_capacity is defined and
              (pvc_capacity | regex_replace('Gi','') | int) >= 10 }}
         _task6_ok: >-
-          {{ runner_pod is defined and
-             r_data_mount is not skipped and
+          {{ r_data_mount is not skipped and
              r_data_mount is not failed and
              'DATA_READY' in (r_data_mount.stdout | default('')) }}
         _task7_ok: >-
-          {{ runner_pod is defined and
-             r_df_check is not skipped and
+          {{ r_df_check is not skipped and
              r_df_check is not failed and
              'SIZE_OK' in (r_df_check.stdout | default('')) }}
 
@@ -193,10 +157,10 @@
           Task 6: /data mounted and shred file present in VM
           Task 7: /data filesystem resized to >= 9G in VM
         error_msg: |
-          {{ '[ OK ]' if _task1_ok else '[FAIL]' }} Task 1: VM centos-stream9-autopilot — {{ 'found in vmtest' if _task1_ok else 'not found — run Solve or create VM from the lab steps' }}
-          {{ '[ OK ]' if _task2_ok else '[FAIL]' }} Task 2: AutopilotRule volume-resize — {{ 'exists' if _task2_ok else 'not found — run Solve or apply the AutopilotRule manifest' }}
-          {{ '[ OK ]' if _task3_ok else '[FAIL]' }} Task 3: Data PVC label — {{ 'expand=true present' if _task3_ok else 'missing — run: oc label pvc centos-stream9-autopilot-data-disk expand=true -n vmtest' }}
-          {{ '[ OK ]' if _task4_ok else '[FAIL]' }} Task 4: Autopilot event — {{ 'ActiveActionsTaken seen' if _task4_ok else 'not yet fired — Autopilot takes 15-20 min; fill the disk first, then click Validate again' }}
-          {{ '[ OK ]' if _task5_ok else '[FAIL]' }} Task 5: PVC capacity — {{ 'expanded to 10Gi' if _task5_ok else 'not yet 10Gi (current: ' + (pvc_capacity | default('unknown')) + ') — wait for Autopilot to act, then retry' }}
-          {{ '[ OK ]' if _task6_ok else '[FAIL]' }} Task 6: /data mount and fill — {{ 'ready' if _task6_ok else 'not complete — partition and mount /dev/vdb at /data inside the VM, then write a 4G file with shred' }}
-          {{ '[ OK ]' if _task7_ok else '[FAIL]' }} Task 7: /data filesystem size — {{ '>= 9G' if _task7_ok else 'too small — run inside VM: sudo parted /dev/vdb resizepart 1 100%; sudo resize2fs /dev/vdb1' }}
+          {{ '[ OK ]' if _task1_ok else '[FAIL]' }} Task 1: VM — {{ 'found' if _task1_ok else 'not found — run Solve or create VM from lab steps' }}
+          {{ '[ OK ]' if _task2_ok else '[FAIL]' }} Task 2: AutopilotRule — {{ 'exists' if _task2_ok else 'not found — apply the AutopilotRule manifest' }}
+          {{ '[ OK ]' if _task3_ok else '[FAIL]' }} Task 3: PVC label — {{ 'expand=true present' if _task3_ok else 'missing — oc label pvc {{ data_pvc_name }} expand=true -n vmtest' }}
+          {{ '[ OK ]' if _task4_ok else '[FAIL]' }} Task 4: Autopilot event — {{ 'ActiveActionsTaken' if _task4_ok else 'not fired — fill disk first, wait 15-20 min' }}
+          {{ '[ OK ]' if _task5_ok else '[FAIL]' }} Task 5: PVC capacity — {{ '>= 10Gi' if _task5_ok else 'current: ' + (pvc_capacity | default('unknown')) + ' — wait for Autopilot' }}
+          {{ '[ OK ]' if _task6_ok else '[FAIL]' }} Task 6: /data — {{ 'mounted with file' if _task6_ok else 'not ready — partition/format/mount /dev/vdb and fill with shred' }}
+          {{ '[ OK ]' if _task7_ok else '[FAIL]' }} Task 7: filesystem — {{ '>= 9G' if _task7_ok else 'too small — resize partition and filesystem' }}
