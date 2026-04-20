@@ -1,0 +1,63 @@
+= LB1127: Unifying VMs and Containers on Red Hat OpenShift with Portworx
+
+This repository contains the lab content for session *LB1127* at *Red Hat Summit 2026*.
+
+Participants learn how to operate Red Hat OpenShift Virtualization with Portworx Enterprise to provide high availability, live migrations, snapshots, and automatic storage management for virtual machines.
+
+== Lab modules
+
+[cols="1,3",options="header"]
+|===
+| Module | Description
+
+| 1. Install Portworx
+| Install Portworx Enterprise on an OpenShift cluster, create storage classes, and deploy OpenShift Virtualization.
+
+| 2. Create virtual machines
+| Provision virtual machines using both the `oc` CLI and the OpenShift web console.
+
+| 3. Live migrations and high availability
+| Perform live migrations and validate VM resilience across node failures.
+
+| 4. Virtual machine snapshots
+| Create, delete, and restore virtual machine snapshots backed by Portworx.
+
+| 5. Autopilot
+| Configure Portworx Autopilot to automatically expand storage when a VM disk runs low on space.
+|===
+
+== Building the lab guide
+
+The lab guide is built with https://antora.org[Antora] and rendered via https://github.com/rhpds/rhdp_showroom_theme[Red Hat Demo Platform Showroom].
+
+[source,sh]
+----
+npm install --global @antora/cli@3.1 @antora/site-generator@3.1
+antora generate site.yml
+----
+
+Output is written to `www/`.
+
+== Deploying
+
+Push to the `main` branch. The GitHub Actions workflow (`.github/workflows/gh-pages.yml`) builds and publishes to GitHub Pages automatically.
+
+== Repository layout
+
+....
+site.yml                          Antora playbook
+ui-config.yml                     Showroom tab and layout configuration
+content/
+  antora.yml                      Antora component descriptor
+  modules/ROOT/
+    nav.adoc                      Left-hand navigation
+    pages/                        Lab module content (.adoc)
+    assets/images/                Screenshots and diagrams
+  supplemental-ui/                Custom CSS, JS, and partials
+runtime-automation/               Solve and validate playbooks for E2E testing
+....
+
+== Related links
+
+* https://docs.portworx.com[Portworx documentation]
+* https://docs.openshift.com/container-platform/latest/virt/about_virt/about-virt.html[OpenShift Virtualization documentation]

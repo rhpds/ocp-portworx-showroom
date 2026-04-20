@@ -1,1 +1,0 @@
-# pxe-osv-rhdp-lab
