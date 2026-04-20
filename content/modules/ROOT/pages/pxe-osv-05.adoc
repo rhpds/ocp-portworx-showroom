@@ -1,3 +1,5 @@
+= Automatic storage management with Autopilot
+
 == Scenario - Automatic storage management with Autopilot
 
 In this scenario, we will configure Autopilot to grow a PVC when our virtual disk runs low on free space.
@@ -183,15 +185,9 @@ virtctl ssh cloud-user@vm/centos-stream9-autopilot/vmtest \
   -c '(echo g; echo n; echo 1; echo ; echo ; echo w) | sudo fdisk /dev/vdb && sudo mkfs.ext4 /dev/vdb1 && sudo mkdir /data && sudo mount /dev/vdb1 /data'
 ----
 
-== Task 5: Add some storage space
+=== Task 5: Fill the disk
 
-We will use the `shred` command to add some storage space to our virtual machine.
-
-We could of course log in to our VM though the console, but that would require that we log in to the virtual machine with the supplied password.
-
-One of the advantages of an extensible framework like OpenShift is that much of the information about our environment is stored as metadata.
-
-=== Task 6: Start filling the disk
+We will use the `shred` command to fill up storage on our virtual machine to trigger Autopilot.
 
 Let's execute a command to write data to the `/data` disk inside of our virtual machine:
 
@@ -203,7 +199,7 @@ virtctl ssh cloud-user@vm/centos-stream9-autopilot/vmtest \
   -c 'sudo touch /data/file; sudo shred -n 1 -s 4G /data/file'
 ----
 
-=== Task 5: Observe the Portworx Autopilot events
+=== Task 6: Observe the Portworx Autopilot events
 
 Run the following command to observe the state changes for Portworx Autopilot:
 
@@ -229,7 +225,7 @@ executed yet
 
 Once you see `ActiveActionsTaken` in the event output, press `CTRL+C` to exit the watch command.
 
-=== Task 6: Verify the Volume Expansion
+=== Task 7: Verify the volume expansion
 
 Now let's take a look at our PVC - note the automatic expansion of the volume occurred with no human interaction and no application interruption:
 

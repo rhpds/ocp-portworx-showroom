@@ -1,6 +1,8 @@
+= Virtual machine snapshots
+
 == Scenario - Virtual Machine snapshots with Portworx
 
-In this scerario, we will create a virtual machine snapshot.
+In this scenario, we will create a virtual machine snapshot.
 
 === Reminder: Accessing the OpenShift Console
 
@@ -9,7 +11,7 @@ You can access both the terminal and the OpenShift console in tabs to the right.
 ====
 [TIP]
 
-If you would like a seperate window clicking {openshift_cluster_console_url}[OpenShift Web Console^] open the OpenShift Console in a new tab window.
+If you would like a separate window clicking {openshift_cluster_console_url}[OpenShift Web Console^] open the OpenShift Console in a new tab window.
 
 The username is `{openshift_cluster_admin_username}` and the password is `{openshift_cluster_admin_password}`
 ====
@@ -48,11 +50,11 @@ We can then find the virtual machine we will be using for this snapshot.
 
 Click on the VM labeled `centos-stream9-example`.
 
-image:snapshot-vm-01.png[Select VM]
+image:snapshot-vm-01.png[Select VM,link=self,window=blank]
 
 Navigate to the `Snapshots` tab and select `Take Snapshot`
 
-image:snapshot-vm-02.png[Take Snapshot]
+image:snapshot-vm-02.png[Take Snapshot,link=self,window=blank]
 
 We can accept the default and select `Save`
 
@@ -64,7 +66,7 @@ our virtual machine and provide customizations. We can safely ignore
 this warning.
 ====
 
-image:snapshot-vm-03.png[Save Snapshot]
+image:snapshot-vm-03.png[Save Snapshot,link=self,window=blank]
 
 === Task 3: Make a change to our VM
 
@@ -103,11 +105,11 @@ We can then find the virtual machine we will be using for this snapshot.
 
 Click on the VM labeled `centos-stream9-example`.
 
-image:snapshot-vm-01.png[Select VM]
+image:snapshot-vm-01.png[Select VM,link=self,window=blank]
 
 Click on the `Actions` menu, and select `Stop`
 
-image:snapshot-vm-04.png[Stop VM]
+image:snapshot-vm-04.png[Stop VM,link=self,window=blank]
 
 This will stop our running VM so that we can restore our snapshot.
 
@@ -115,13 +117,13 @@ Click on the `Snapshots` tab. Then click on the kebab menu by the
 snapshot we created earlier and click
 `Restore VirtualMachine from snapshot`
 
-image:snapshot-vm-05.png[restore VM]
+image:snapshot-vm-05.png[restore VM,link=self,window=blank]
 
 ====
 [NOTE]
-Restoring a snapshot is a distructive operation as it
+Restoring a snapshot is a destructive operation as it
 discards all changes that were made to a virtual machine since the
-snapshot was taken. To avoid loosing data, it is possible to take a
+snapshot was taken. To avoid losing data, it is possible to take a
 snapshot before restoring our virtual machine.
 ====
 
@@ -130,7 +132,7 @@ Confirm the restore by clicking the `Restore` button.
 We can now start our virtual machine by clicking on the `Action` menu
 and clicking `Start`
 
-image:snapshot-vm-06.png[start VM]
+image:snapshot-vm-06.png[start VM,link=self,window=blank]
 
 We can check on the progress of our virtual machine’s boot by clicking
 on the `Console` or `Overview` tab.

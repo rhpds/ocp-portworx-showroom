@@ -6,7 +6,7 @@ In this lab you will learn how to operate OpenShift Virtualization with Portworx
 
 This lab focuses on hands-on learning.
 
-image::px-logo.jpg[px-logo]
+image::px-logo.jpg[px-logo,link=self,window=blank]
 
 === Lab Access
 

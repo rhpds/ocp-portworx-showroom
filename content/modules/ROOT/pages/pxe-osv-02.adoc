@@ -1,3 +1,5 @@
+= Create virtual machines
+
 == Scenario - Persistent Storage Volume Provisioning and Availability for Virtual Machines
 
 In this scenario, we will learn about how to provision a virtual machine
@@ -10,7 +12,7 @@ You can access both the terminal and the OpenShift console in tabs to the right.
 ====
 [TIP]
 
-If you would like a seperate window clicking {openshift_cluster_console_url}[OpenShift Web Console^] open the OpenShift Console in a new tab window.
+If you would like a separate window clicking {openshift_cluster_console_url}[OpenShift Web Console^] open the OpenShift Console in a new tab window.
 
 The username is `{openshift_cluster_admin_username}` and the password is `{openshift_cluster_admin_password}`
 ====
@@ -130,27 +132,27 @@ Start by logging in to the OpenShift console if you haven't already.
 
 === Task 1: Create a new VM
 
-Navigate to the Virtualzation > Virtual Machines menu
+Navigate to the Virtualization > Virtual Machines menu
 
-image:create-vm-11.png[Select VMs]
+image:create-vm-11.png[Select VMs,link=self,window=blank]
 
 Click the `Create` button, and then select `From instanceType` from the menu
 
-image:create-vm-13.png[Click Button]
+image:create-vm-13.png[Click Button,link=self,window=blank]
 
 Select our `vmtest` project in the upper left of the interface
 
-image:create-vm-12.png[Select Project]
+image:create-vm-12.png[Select Project,link=self,window=blank]
 
 Select the CentOS Stream image. We can also use the default instance
 type.
 
-image:create-vm-03-2.png[Select CentOS]
+image:create-vm-03-2.png[Select CentOS,link=self,window=blank]
 
 Verify that our StorageClass is set to `px-rwx-block-kubevirt` and click
 `Create VirtualMachine`
 
-image:create-vm-04.png[Select StorageClass]
+image:create-vm-04.png[Select StorageClass,link=self,window=blank]
 
 This will automatically start the virtual machine after a short
 provisioning process.
@@ -163,7 +165,7 @@ It can take a few minutes for the VM to boot for the first time
 Explore the tabs for this virtual machine. We can view metrics,
 configure snapshots, and view the YAML configuration.
 
-image:create-vm-06.png[Interact with VM]
+image:create-vm-06.png[Interact with VM,link=self,window=blank]
 
 ====
 [NOTE]

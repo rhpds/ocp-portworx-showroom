@@ -1,3 +1,5 @@
+= Live migrations and high availability
+
 == Scenario - Persistent Storage Volume Provisioning and Availability for Virtual Machines
 
 In this scenario, we will learn how to provision a virtual machine
@@ -10,7 +12,7 @@ You can access both the terminal and the OpenShift console in tabs to the right.
 ====
 [TIP]
 
-If you would like a seperate window clicking {openshift_cluster_console_url}[OpenShift Web Console^] open the OpenShift Console in a new tab window.
+If you would like a separate window clicking {openshift_cluster_console_url}[OpenShift Web Console^] open the OpenShift Console in a new tab window.
 
 The username is `{openshift_cluster_admin_username}` and the password is `{openshift_cluster_admin_password}`
 ====
@@ -55,12 +57,12 @@ oc get pvc
 Back in the OpenShift Console, click on the `Overview` tab and note
 the node where our VM is running.
 
-image:livemigrate-vm-01.png[get ocp node]
+image:livemigrate-vm-01.png[get ocp node,link=self,window=blank]
 
 We can now migrate the VM to a new node by selecting the `Actions` menu,
 and clicking `Migrate` and leaving `Automatically Select Node`
 
-image:livemigrate-vm-02.png[migrate vm]
+image:livemigrate-vm-02.png[migrate vm,link=self,window=blank]
 
 After a few moments the interface will update with the new node.
 
@@ -131,7 +133,7 @@ chroot /host
 ----
 
 And finally, reboot the OpenShift worker node hosting the running
-MongoDB pod:
+virtual machine:
 
 [source,sh,role=execute]
 ----
