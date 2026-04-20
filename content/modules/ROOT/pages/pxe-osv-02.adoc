@@ -25,7 +25,14 @@ In order to interact with our virtual machine, let's create an SSH keypair.
 ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa -N ""
 ----
 
-=== Task 2: Create an OpenShift Secret with our SSH key:
+=== Task 2: Create the vmtest namespace
+
+[source,sh,role=execute]
+----
+oc create ns vmtest
+----
+
+=== Task 3: Create an OpenShift Secret with our SSH key:
 
 [source,sh,role=execute]
 ----
@@ -41,7 +48,7 @@ data:
 EOF
 ----
 
-=== Task 3: Create an OpenShift Virtual Machine
+=== Task 4: Create an OpenShift Virtual Machine
 
 [source,sh,role=execute]
 ----
@@ -101,7 +108,7 @@ We can check the status of the VM running this command.
 
 [source,sh,role=execute]
 ----
-watch oc get vms,dv
+watch oc get vms,dv -n vmtest
 ----
 Provision will take a couple of minutes.
 
@@ -109,7 +116,7 @@ Once the VM is running, ctrl-c to exit.  We can then log into this VM using this
 
 [source,sh,role=execute]
 ----
-virtctl ssh cloud-user@centos-stream9-example \
+virtctl ssh cloud-user@vm/centos-stream9-example/vmtest \
   -i ~/.ssh/id_rsa \
   -t "-o StrictHostKeyChecking=no"
 ----
@@ -124,20 +131,20 @@ Navigate to the Virtualzation > Virtual Machines menu
 
 image:create-vm-11.png[Select VMs]
 
-Select our `vmtest` project in the upper left of the interface
-
-image:create-vm-12.png[Select Project]
-
 Click the `Create` button, and then select `From instanceType` from the menu
 
 image:create-vm-13.png[Click Button]
+
+Select our `vmtest` project in the upper left of the interface
+
+image:create-vm-12.png[Select Project]
 
 Select the CentOS Stream image. We can also use the default instance
 type.
 
 image:create-vm-03-2.png[Select CentOS]
 
-Verify that our StorageClass is set to `px-csi-vm` and click
+Verify that our StorageClass is set to `px-rwx-block-kubevirt` and click
 `Create VirtualMachine`
 
 image:create-vm-04.png[Select StorageClass]

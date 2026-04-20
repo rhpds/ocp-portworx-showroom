@@ -149,12 +149,12 @@ We will apply that label to our virtual machine's PVC.
 [source,sh,role=execute]
 ----
 oc label pvc centos-stream9-autopilot-data-disk \
-  expand=true --overwrite
+  expand=true --overwrite -n vmtest
 ----
 
 [source,sh,role=execute]
 ----
-oc get pvc centos-stream9-autopilot-data-disk
+oc get pvc centos-stream9-autopilot-data-disk -n vmtest
 ----
 
 ====
@@ -168,13 +168,13 @@ Because this is a new VM, let's format our data disk and mount it to `/data`
 [source,sh,role=execute]
 ----
 # Wait for the VM to boot
-until virtctl ssh cloud-user@centos-stream9-autopilot -i ~/.ssh/id_rsa -t "-o StrictHostKeyChecking=no" -c 'lsblk'; do
+until virtctl ssh cloud-user@vm/centos-stream9-autopilot/vmtest -i ~/.ssh/id_rsa -t "-o StrictHostKeyChecking=no" -c 'lsblk'; do
     echo "waiting for VM to boot"
     sleep 10
 done
 
 # Set up the filesystem and mount the disk as /data
-virtctl ssh cloud-user@centos-stream9-autopilot \
+virtctl ssh cloud-user@vm/centos-stream9-autopilot/vmtest \
   -i ~/.ssh/id_rsa \
   -t "-o StrictHostKeyChecking=no" \
   -c '(echo g; echo n; echo 1; echo ; echo ; echo w) | sudo fdisk /dev/vdb && sudo mkfs.ext4 /dev/vdb1 && sudo mkdir /data && sudo mount /dev/vdb1 /data'
@@ -194,7 +194,7 @@ Let's execute a command to write data to the `/data` disk inside of our virtual 
 
 [source,sh,role=execute]
 ----
-virtctl ssh cloud-user@centos-stream9-autopilot \
+virtctl ssh cloud-user@vm/centos-stream9-autopilot/vmtest \
   -i ~/.ssh/id_rsa \
   -t "-o StrictHostKeyChecking=no" \
   -c 'sudo touch /data/file; sudo shred -n 1 -s 4G /data/file'
@@ -232,7 +232,7 @@ Now let's take a look at our PVC - note the automatic expansion of the volume oc
 
 [source,sh,role=execute]
 ----
-oc get pvc
+oc get pvc -n vmtest
 ----
 
 ====
@@ -244,7 +244,7 @@ Let's expand the virtual machine's filesystem:
 
 [source,sh,role=execute]
 ----
-virtctl ssh cloud-user@centos-stream9-autopilot \
+virtctl ssh cloud-user@vm/centos-stream9-autopilot/vmtest \
   -i ~/.ssh/id_rsa -t "-o StrictHostKeyChecking=no" \
   -c 'yes Fix | sudo parted --script --fix /dev/vdb print ; yes | sudo parted ---pretend-input-tty /dev/vdb resizepart 1 100% ; sudo resize2fs /dev/vdb1'
 ----
@@ -253,11 +253,28 @@ We can now observe the freespace in our virtual machine by running:
 
 [source,sh,role=execute]
 ----
-virtctl ssh cloud-user@centos-stream9-autopilot -i ~/.ssh/id_rsa -t "-o StrictHostKeyChecking=no" -c 'df -h'
+virtctl ssh cloud-user@vm/centos-stream9-autopilot/vmtest -i ~/.ssh/id_rsa -t "-o StrictHostKeyChecking=no" -c 'df -h'
 ----
 
 Notice the size of the data disk mounted at `/data`
 
 You've just configured Portworx Autopilot and observed how it can perform automated capacity management based on rules you configure, and be able to ``right-size'' your underlying persistent storage as it is needed!
 
+== Lab Complete
+
+Congratulations on completing the Portworx Enterprise with OpenShift Virtualization lab!
+
+Throughout this lab you have:
+
+* Installed and configured **Portworx Enterprise** on an OpenShift cluster
+* Provisioned **virtual machines** backed by Portworx persistent storage
+* Performed **live migrations** and validated high availability across node failures
+* Used **Portworx snapshots** to protect and restore a virtual machine
+* Leveraged **Portworx Autopilot** to automatically expand storage capacity in response to real demand — with zero downtime and no manual intervention
+
+Portworx Enterprise provides a powerful, enterprise-grade storage foundation for OpenShift Virtualization workloads, ensuring your virtual machines are resilient, portable, and efficiently managed at scale.
+
+We hope you found this lab valuable. For further reading, visit the https://docs.portworx.com[Portworx documentation^] and the https://docs.openshift.com/container-platform/latest/virt/about_virt/about-virt.html[OpenShift Virtualization documentation^].
+
+---
 

@@ -72,7 +72,7 @@ Let's "accidentally" delete an important file:
 
 [source,sh,role=execute]
 ----
-virtctl ssh cloud-user@centos-stream9-example \
+virtctl ssh cloud-user@vm/centos-stream9-example/vmtest \
   -i ~/.ssh/id_rsa \
   -t "-o StrictHostKeyChecking=no" \
   -c 'sudo rm /etc/fstab'
@@ -83,7 +83,7 @@ We can verify that the file is indeed missing by running:
 
 [source,sh,role=execute]
 ----
-virtctl ssh cloud-user@centos-stream9-example \
+virtctl ssh cloud-user@vm/centos-stream9-example/vmtest \
   -i ~/.ssh/id_rsa \
   -t "-o StrictHostKeyChecking=no" \
   -c 'cat /etc/fstab'
@@ -139,7 +139,7 @@ our fstab file is back in place:
 
 [source,sh,role=execute]
 ----
-virtctl ssh cloud-user@centos-stream9-example \
+virtctl ssh cloud-user@vm/centos-stream9-example/vmtest \
   -i ~/.ssh/id_rsa \
   -t "-o StrictHostKeyChecking=no" \
   -c 'cat /etc/fstab'

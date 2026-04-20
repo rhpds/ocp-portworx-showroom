@@ -61,7 +61,7 @@ EOF
 
 === Task: Install the Portworx Operator
 
-Navigate to `Operators` > `Operator Hub` and type `Portworx` in to the filter, as seen in this screenshot:
+Navigate to `Ecosystem` > `Software Catalog` and type `Portworx` in to the filter, as seen in this screenshot:
 
 .install-operator
 image:02-pxeinstall-installoperator-01.png[install-operator]
@@ -96,7 +96,7 @@ Grab our StorageCluster specification:
 
 [source,sh,role=execute]
 ----
-curl -o $HOME/px-spec.yaml 'https://install.portworx.com/3.4.0.1?operator=true&mc=false&kbver=1.29.10&ns=portworx&b=true&iop=6&s=%22type%3Dgp3%2Csize%3D50%22%2C%22&ce=aws&r=17001&c=px-cluster-443e64d8-f2c7-47d2-b81b-295567465a84&osft=true&stork=true&csi=true&tel=false&st=k8s&mz=3'
+curl -o $HOME/px-spec.yaml 'https://install.portworx.com/3.6.0?operator=true&mc=false&kbver=1.33.9&ns=portworx&b=true&iop=6&s=%22type%3Dgp3%2Csize%3D50%22%2C%22&ce=aws&r=17001&c=px-cluster-443e64d8-f2c7-47d2-b81b-295567465a84&osft=true&stork=true&csi=true&tel=false&st=k8s&mz=3'
 ----
 
 Take a look at our current manifest by using the cat utility:
