@@ -94,15 +94,7 @@
       delay: 10
       ignore_errors: true
 
-    - name: Delete VMIM after successful migration (idempotency)
-      kubernetes.core.k8s:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        state: absent
-        api_version: kubevirt.io/v1
-        kind: VirtualMachineInstanceMigration
-        namespace: "{{ vm_namespace }}"
-        name: "solve-migrate-{{ vm_name }}"
-      ignore_errors: true
+    # Keep VMIM resource as evidence for validation (task 3).
 
     # ------------------------------------------------------------------
     # block-04/05 — Check pods and VM state after migration
