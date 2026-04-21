@@ -10,8 +10,7 @@ content:
 
 ui:
   bundle:
-    url: https://github.com/rhpds/rhdp_showroom_theme/releases/download/rh-summit-2025/ui-bundle.zip
-
+    url: https://github.com/rhpds/rhdp_showroom_theme/releases/download/v2.0.2/ui-bundle.zip
     snapshot: true
   supplemental_files:
   - path: ./content/supplemental-ui
@@ -24,9 +23,6 @@ antora:
   - require: ./content/lib/dev-mode.js
     enabled: false
   - require: ./content/lib/inject-buttons.js
-
-runtime:
-  fetch: true
 
 output:
   dir: ./www

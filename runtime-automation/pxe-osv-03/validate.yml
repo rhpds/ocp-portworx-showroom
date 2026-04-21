@@ -39,16 +39,18 @@
 
     # -------------------------------------------------------
     # Check 3 — Live migration occurred
-    # Evidence: VMIM resource with Succeeded phase, OR a non-Running
+    # Evidence: Migrated event on the VMI, OR a non-Running
     # virt-launcher pod (Succeeded/Failed) left after migration.
     # -------------------------------------------------------
-    - name: Get VirtualMachineInstanceMigration resources
-      kubernetes.core.k8s_info:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        api_version: kubevirt.io/v1
-        kind: VirtualMachineInstanceMigration
-        namespace: "{{ vm_namespace }}"
-      register: r_vmim
+    - name: Check for migration events on VMI
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
+        {{ bastion_user }}@{{ bastion_host }}
+        "oc get events -n {{ vm_namespace }}
+        --field-selector involvedObject.name={{ vm_name }},reason=Migrated
+        -o custom-columns=REASON:.reason --no-headers 2>&1"
+      register: r_migration_events
+      changed_when: false
       ignore_errors: true
 
     - name: Get all virt-launcher pods in vmtest (including Completed)
@@ -96,10 +98,7 @@
           }}
         _task3_ok: >-
           {{
-            (r_vmim.resources | default([])
-             | selectattr('status.phase', 'defined')
-             | selectattr('status.phase', 'equalto', 'Succeeded')
-             | list | length > 0)
+            ('Migrated' in (r_migration_events.stdout | default('')))
             or
             (r_launcher_pods.resources | default([])
              | selectattr('status.phase', 'equalto', 'Succeeded')
