@@ -326,7 +326,7 @@
     - name: Install virtctl on bastion via SSH
       ansible.builtin.shell: >-
         sshpass -p '{{ bastion_password }}' ssh
-        -o StrictHostKeyChecking=no
+        -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
         {{ bastion_user }}@{{ bastion_host }}
         "VIRTCTL_URL=\$(oc get consoleclidownload {{ virtctl_consoleclidownload }}
         -o json | jq -r '.spec.links[] | select(.text == \"Download virtctl for Linux for x86_64\") | .href')

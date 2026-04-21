@@ -11,7 +11,7 @@
     autopilot_rule_name: volume-resize
     ssh_key_path: ~/.ssh/id_rsa
     ssh_user: cloud-user
-    ssh_opts: "-o StrictHostKeyChecking=no -o ConnectTimeout=15"
+    ssh_opts: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15"
 
   tasks:
 
