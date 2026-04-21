@@ -12,6 +12,7 @@
     ssh_key_path: ~/.ssh/id_rsa
     ssh_user: cloud-user
     ssh_opts: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
+    virtctl_ssh_opts: "-t '-o StrictHostKeyChecking=no' -t '-o UserKnownHostsFile=/dev/null' -t '-o ConnectTimeout=10'"
 
   tasks:
 
@@ -219,7 +220,7 @@
         sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
         {{ bastion_user }}@{{ bastion_host }}
         "virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
-        -i {{ ssh_key_path }} -t '{{ ssh_opts }}'
+        -i {{ ssh_key_path }} {{ virtctl_ssh_opts }}
         -c 'lsblk' 2>&1 && echo SSH_OK"
       register: r_ssh_probe
       until: r_ssh_probe.stdout is defined and 'SSH_OK' in r_ssh_probe.stdout
@@ -233,7 +234,7 @@
         sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
         {{ bastion_user }}@{{ bastion_host }}
         "virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
-        -i {{ ssh_key_path }} -t '{{ ssh_opts }}'
+        -i {{ ssh_key_path }} {{ virtctl_ssh_opts }}
         -c '(echo g; echo n; echo 1; echo ; echo ; echo w) | sudo fdisk /dev/vdb
         && sudo mkfs.ext4 /dev/vdb1
         && sudo mkdir -p /data
@@ -251,7 +252,7 @@
         sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
         {{ bastion_user }}@{{ bastion_host }}
         "virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
-        -i {{ ssh_key_path }} -t '{{ ssh_opts }}'
+        -i {{ ssh_key_path }} {{ virtctl_ssh_opts }}
         -c 'sudo touch /data/file; sudo shred -n 1 -s 4G /data/file && echo SHRED_DONE' 2>&1"
       register: r_shred
       async: 600
@@ -306,7 +307,7 @@
         sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
         {{ bastion_user }}@{{ bastion_host }}
         "virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
-        -i {{ ssh_key_path }} -t '{{ ssh_opts }}'
+        -i {{ ssh_key_path }} {{ virtctl_ssh_opts }}
         -c 'yes Fix | sudo parted --script --fix /dev/vdb print;
         yes | sudo parted --pretend-input-tty /dev/vdb resizepart 1 100%;
         sudo resize2fs /dev/vdb1 && echo RESIZE_OK' 2>&1"
@@ -322,7 +323,7 @@
         sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
         {{ bastion_user }}@{{ bastion_host }}
         "virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
-        -i {{ ssh_key_path }} -t '{{ ssh_opts }}'
+        -i {{ ssh_key_path }} {{ virtctl_ssh_opts }}
         -c 'df -h /data' 2>&1"
       register: r_df
       changed_when: false

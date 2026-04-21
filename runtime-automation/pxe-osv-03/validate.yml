@@ -9,6 +9,7 @@
     vm_namespace: vmtest
     ssh_key_path: ~/.ssh/id_rsa
     ssh_opts: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+    virtctl_ssh_opts: "-t '-o StrictHostKeyChecking=no' -t '-o UserKnownHostsFile=/dev/null'"
 
   tasks:
 
@@ -70,7 +71,7 @@
         sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
         {{ bastion_user }}@{{ bastion_host }}
         "virtctl ssh cloud-user@vm/{{ vm_name }}/{{ vm_namespace }}
-        -i {{ ssh_key_path }} -t '{{ ssh_opts }}'
+        -i {{ ssh_key_path }} {{ virtctl_ssh_opts }}
         -c 'cat ~/text 2>/dev/null || echo __missing__'"
       register: r_text_file
       changed_when: false

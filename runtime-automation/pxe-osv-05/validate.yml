@@ -12,6 +12,7 @@
     ssh_key_path: ~/.ssh/id_rsa
     ssh_user: cloud-user
     ssh_opts: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15"
+    virtctl_ssh_opts: "-t '-o StrictHostKeyChecking=no' -t '-o UserKnownHostsFile=/dev/null' -t '-o ConnectTimeout=15'"
 
   tasks:
 
@@ -95,7 +96,7 @@
         sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
         {{ bastion_user }}@{{ bastion_host }}
         "virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
-        -i {{ ssh_key_path }} -t '{{ ssh_opts }}'
+        -i {{ ssh_key_path }} {{ virtctl_ssh_opts }}
         -c 'mountpoint /data && test -f /data/file && echo DATA_READY || echo DATA_MISSING' 2>&1"
       register: r_data_mount
       changed_when: false
@@ -110,7 +111,7 @@
         sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
         {{ bastion_user }}@{{ bastion_host }}
         "virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
-        -i {{ ssh_key_path }} -t '{{ ssh_opts }}'
+        -i {{ ssh_key_path }} {{ virtctl_ssh_opts }}
         -c 'df /data | awk \"NR==2{print (\\\$2 >= 9437184) ? \\\"SIZE_OK\\\" : \\\"SIZE_SMALL\\\"}\"' 2>&1"
       register: r_df_check
       changed_when: false
