@@ -163,6 +163,25 @@
         | list | length > 0
       ignore_errors: true
 
+    - name: Find runner pod node to avoid self-reboot
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
+        kind: Pod
+        namespace: "{{ lookup('env', 'POD_NAMESPACE') | default('showroom-' + guid, true) }}"
+        label_selectors:
+          - "app.kubernetes.io/name=showroom"
+      register: r_runner_pod
+      ignore_errors: true
+
+    - name: Set runner node fact
+      ansible.builtin.set_fact:
+        runner_node: >-
+          {{ (r_runner_pod.resources | default([])
+              | selectattr('status.phase', 'equalto', 'Running')
+              | list | first).spec.nodeName | default('') }}
+      when: r_runner_pod.resources | default([]) | length > 0
+      ignore_errors: true
+
     - name: >-
         WARNING - Reboot worker node hosting VM (intentionally destructive HA test)
       ansible.builtin.shell: >-
@@ -172,10 +191,21 @@
         --to-namespace={{ vm_namespace }}
         -- chroot /host shutdown -r +0 || true;
         echo reboot-triggered"
-      when: vm_node is defined
+      when:
+        - vm_node is defined
+        - vm_node != (runner_node | default(''))
       register: r_reboot
       changed_when: "'reboot-triggered' in (r_reboot.stdout | default(''))"
       ignore_errors: true
+
+    - name: Skip reboot — VM is on the same node as the runner
+      ansible.builtin.debug:
+        msg: >-
+          Skipping node reboot: VM and runner are both on {{ vm_node }}.
+          The HA test would kill the automation runner.
+      when:
+        - vm_node is defined
+        - vm_node == (runner_node | default(''))
 
     # ------------------------------------------------------------------
     # block-11 — Wait for VM to recover on a new node after reboot
