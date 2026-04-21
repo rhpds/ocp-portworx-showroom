@@ -300,8 +300,24 @@
       when: r_pvc_expanded.resources | default([]) | length > 0
 
     # ------------------------------------------------------------------
-    # block-09: Resize the partition and filesystem inside the VM
+    # block-09: Wait for block device to reflect new size, then resize
     # ------------------------------------------------------------------
+    - name: Wait for /dev/vdb to reflect expanded size in VM guest
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
+        {{ bastion_user }}@{{ bastion_host }}
+        "virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
+        -i {{ ssh_key_path }} {{ virtctl_ssh_opts }}
+        -c 'lsblk -b -d -n -o SIZE /dev/vdb'"
+      register: r_blk_size
+      until: >-
+        r_blk_size.rc == 0 and
+        (r_blk_size.stdout | default('0') | trim | int) > 5368709120
+      retries: 30
+      delay: 10
+      changed_when: false
+      ignore_errors: true
+
     - name: Resize partition and filesystem inside VM
       ansible.builtin.shell: >-
         sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}

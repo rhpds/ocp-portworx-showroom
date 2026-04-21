@@ -112,7 +112,7 @@
         {{ bastion_user }}@{{ bastion_host }}
         "virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
         -i {{ ssh_key_path }} {{ virtctl_ssh_opts }}
-        -c 'df -BG /data --output=size | tail -1' 2>&1"
+        -c 'df -BG /data --output=size | tail -1'"
       register: r_df_check
       changed_when: false
       ignore_errors: true
