@@ -24,8 +24,5 @@ antora:
     enabled: false
   - require: ./content/lib/inject-buttons.js
 
-runtime:
-  fetch: true
-
 output:
   dir: ./www
