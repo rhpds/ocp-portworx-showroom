@@ -209,6 +209,11 @@
         -i {{ ssh_key_path }} -t '{{ ssh_opts }}'
         -c 'cat ~/text'"
       register: r_verify_text_post_ha
+      until: >-
+        r_verify_text_post_ha.rc == 0 and
+        'Red Hat was here' in (r_verify_text_post_ha.stdout | default(''))
+      retries: 20
+      delay: 15
       changed_when: false
       ignore_errors: true
 
