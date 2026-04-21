@@ -167,10 +167,10 @@
       ansible.builtin.shell: >-
         sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
         {{ bastion_user }}@{{ bastion_host }}
-        "oc debug node/{{ vm_node }}
+        "timeout 30 oc debug node/{{ vm_node }}
         --to-namespace={{ vm_namespace }}
-        -- chroot /host reboot &
-        sleep 5 && echo reboot-triggered"
+        -- chroot /host shutdown -r +0 || true;
+        echo reboot-triggered"
       when: vm_node is defined
       register: r_reboot
       changed_when: "'reboot-triggered' in (r_reboot.stdout | default(''))"
