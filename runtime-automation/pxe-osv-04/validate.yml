@@ -9,6 +9,10 @@
     vm_namespace: vmtest
     snapshot_name: centos-stream9-example-snapshot-ftl
     restore_name: centos-stream9-example-restore-ftl
+    ssh_user: cloud-user
+    ssh_key_path: ~/.ssh/id_rsa
+    ssh_opts: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+    virtctl_ssh_opts: "-t '-o StrictHostKeyChecking=no' -t '-o UserKnownHostsFile=/dev/null'"
 
   tasks:
 
@@ -65,37 +69,16 @@
 
     # -------------------------------------------------------
     # Check 5 - /etc/fstab is present in VM (restored)
-    # Only run when a virt-launcher pod is available
     # -------------------------------------------------------
-    - name: Find running virt-launcher pod
-      kubernetes.core.k8s_info:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        kind: Pod
-        namespace: "{{ vm_namespace }}"
-        label_selectors:
-          - "vm.kubevirt.io/name={{ vm_name }}"
-      register: r_virt_pods
-      ignore_errors: true
-
-    - name: Set virt-launcher pod name
-      ansible.builtin.set_fact:
-        virt_launcher_pod: >-
-          {{ (r_virt_pods.resources
-              | selectattr('status.phase', 'equalto', 'Running')
-              | list | first).metadata.name }}
-      when: >-
-        r_virt_pods.resources | default([]) |
-        selectattr('status.phase', 'equalto', 'Running') | list | length > 0
-
-    - name: Check /etc/fstab exists in restored VM
-      kubernetes.core.k8s_exec:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: "{{ vm_namespace }}"
-        pod: "{{ virt_launcher_pod }}"
-        container: compute
-        command: "sh -c 'test -f /etc/fstab && echo FSTAB_OK || echo FSTAB_MISSING'"
+    - name: Check /etc/fstab exists in restored VM via virtctl ssh
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
+        {{ bastion_user }}@{{ bastion_host }}
+        "virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
+        -i {{ ssh_key_path }} {{ virtctl_ssh_opts }}
+        -c 'test -f /etc/fstab && echo FSTAB_OK || echo FSTAB_MISSING'"
       register: r_fstab
-      when: virt_launcher_pod is defined
+      changed_when: false
       ignore_errors: true
 
     # -------------------------------------------------------
@@ -116,8 +99,7 @@
           {{ r_vmi.resources | default([]) | length > 0 and
              (r_vmi.resources[0].status.phase | default('')) == 'Running' }}
         _task5_ok: >-
-          {{ virt_launcher_pod is defined and
-             r_fstab is not skipped and
+          {{ r_fstab is not skipped and
              r_fstab is not failed and
              'FSTAB_OK' in (r_fstab.stdout | default('')) }}
 

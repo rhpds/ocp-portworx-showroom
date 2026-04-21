@@ -9,6 +9,9 @@
     snapshot_name: centos-stream9-example-snapshot-ftl
     restore_name: centos-stream9-example-restore-ftl
     ssh_user: cloud-user
+    ssh_key_path: ~/.ssh/id_rsa
+    ssh_opts: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+    virtctl_ssh_opts: "-t '-o StrictHostKeyChecking=no' -t '-o UserKnownHostsFile=/dev/null'"
 
   tasks:
 
@@ -83,79 +86,51 @@
     # Task 3 (block-02): Delete /etc/fstab in the VM
     # INTENTIONALLY DESTRUCTIVE — simulates accidental data loss.
     # Guard: skip if /etc/fstab is already absent.
-    # Uses k8s_exec into virt-launcher pod (no SSH key required).
     # ---------------------------------------------------------------
-    - name: Find virt-launcher pod for VM
-      kubernetes.core.k8s_info:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        kind: Pod
-        namespace: "{{ vm_namespace }}"
-        label_selectors:
-          - "vm.kubevirt.io/name={{ vm_name }}"
-      register: r_virt_pods
-      ignore_errors: true
-
-    - name: Set virt-launcher pod name
-      ansible.builtin.set_fact:
-        virt_launcher_pod: >-
-          {{ (r_virt_pods.resources
-              | selectattr('status.phase', 'equalto', 'Running')
-              | list | first).metadata.name }}
-      when: >-
-        r_virt_pods.resources | default([]) |
-        selectattr('status.phase', 'equalto', 'Running') | list | length > 0
-
     - name: Check if /etc/fstab exists in VM guest
-      kubernetes.core.k8s_exec:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: "{{ vm_namespace }}"
-        pod: "{{ virt_launcher_pod }}"
-        container: compute
-        command: "sh -c 'test -f /etc/fstab && echo EXISTS || echo ABSENT'"
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
+        {{ bastion_user }}@{{ bastion_host }}
+        "virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
+        -i {{ ssh_key_path }} {{ virtctl_ssh_opts }}
+        -c 'test -f /etc/fstab && echo EXISTS || echo ABSENT'"
       register: r_fstab_check
-      when: virt_launcher_pod is defined
+      changed_when: false
       ignore_errors: true
 
-    # INTENTIONALLY DESTRUCTIVE: deletes /etc/fstab to simulate data loss.
-    # Skipped when /etc/fstab is already absent (idempotency guard).
     - name: Delete /etc/fstab in VM guest (simulate data loss)
-      kubernetes.core.k8s_exec:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: "{{ vm_namespace }}"
-        pod: "{{ virt_launcher_pod }}"
-        container: compute
-        command: "sh -c 'sudo rm -f /etc/fstab && echo DELETED'"
-      when:
-        - virt_launcher_pod is defined
-        - r_fstab_check.stdout | default('') is search('EXISTS')
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
+        {{ bastion_user }}@{{ bastion_host }}
+        "virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
+        -i {{ ssh_key_path }} {{ virtctl_ssh_opts }}
+        -c 'sudo rm -f /etc/fstab && echo DELETED'"
+      when: r_fstab_check.stdout | default('') is search('EXISTS')
+      register: r_fstab_delete
+      changed_when: "'DELETED' in (r_fstab_delete.stdout | default(''))"
       ignore_errors: true
 
-    - name: Verify /etc/fstab is absent (block-03 equivalent)
-      kubernetes.core.k8s_exec:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: "{{ vm_namespace }}"
-        pod: "{{ virt_launcher_pod }}"
-        container: compute
-        command: "sh -c 'test -f /etc/fstab && echo EXISTS || echo ABSENT'"
+    - name: Verify /etc/fstab is absent
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
+        {{ bastion_user }}@{{ bastion_host }}
+        "virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
+        -i {{ ssh_key_path }} {{ virtctl_ssh_opts }}
+        -c 'test -f /etc/fstab && echo EXISTS || echo ABSENT'"
       register: r_fstab_absent
-      when: virt_launcher_pod is defined
+      changed_when: false
       ignore_errors: true
 
     # ---------------------------------------------------------------
     # Task 4 (prose-03a): Stop VM before restore
     # ---------------------------------------------------------------
-    - name: Stop VM
-      kubernetes.core.k8s:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        state: present
-        definition:
-          apiVersion: kubevirt.io/v1
-          kind: VirtualMachine
-          metadata:
-            name: "{{ vm_name }}"
-            namespace: "{{ vm_namespace }}"
-          spec:
-            running: false
+    - name: Stop VM via virtctl
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
+        {{ bastion_user }}@{{ bastion_host }}
+        "virtctl stop {{ vm_name }} -n {{ vm_namespace }}"
+      register: r_stop
+      changed_when: r_stop.rc == 0
       ignore_errors: true
 
     - name: Wait for VM to stop (VMI gone)
@@ -223,18 +198,13 @@
     # ---------------------------------------------------------------
     # Task 4 (prose-03c): Start VM after restore
     # ---------------------------------------------------------------
-    - name: Start VM after restore
-      kubernetes.core.k8s:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        state: present
-        definition:
-          apiVersion: kubevirt.io/v1
-          kind: VirtualMachine
-          metadata:
-            name: "{{ vm_name }}"
-            namespace: "{{ vm_namespace }}"
-          spec:
-            running: true
+    - name: Start VM after restore via virtctl
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
+        {{ bastion_user }}@{{ bastion_host }}
+        "virtctl start {{ vm_name }} -n {{ vm_namespace }}"
+      register: r_start
+      changed_when: r_start.rc == 0
       ignore_errors: true
 
     - name: Wait for VMI to be running
@@ -254,42 +224,21 @@
 
     # ---------------------------------------------------------------
     # Task 5 (block-04): Verify /etc/fstab is restored
-    # Wait for virt-launcher pod to be ready again, then check.
     # ---------------------------------------------------------------
-    - name: Wait for virt-launcher pod to be running after restore
-      kubernetes.core.k8s_info:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        kind: Pod
-        namespace: "{{ vm_namespace }}"
-        label_selectors:
-          - "vm.kubevirt.io/name={{ vm_name }}"
-      register: r_virt_pods_post
-      until: >-
-        r_virt_pods_post.resources | default([]) |
-        selectattr('status.phase', 'equalto', 'Running') | list | length > 0
-      retries: 36
-      delay: 10
-      ignore_errors: true
-
-    - name: Set virt-launcher pod name after restore
-      ansible.builtin.set_fact:
-        virt_launcher_pod_post: >-
-          {{ (r_virt_pods_post.resources
-              | selectattr('status.phase', 'equalto', 'Running')
-              | list | first).metadata.name }}
-      when: >-
-        r_virt_pods_post.resources | default([]) |
-        selectattr('status.phase', 'equalto', 'Running') | list | length > 0
-
-    - name: Verify /etc/fstab is present after restore (block-04)
-      kubernetes.core.k8s_exec:
-        kubeconfig: "{{ k8s_kubeconfig | default(omit) }}"
-        namespace: "{{ vm_namespace }}"
-        pod: "{{ virt_launcher_pod_post }}"
-        container: compute
-        command: "sh -c 'cat /etc/fstab && echo FSTAB_OK || echo FSTAB_MISSING'"
+    - name: Verify /etc/fstab is present after restore
+      ansible.builtin.shell: >-
+        sshpass -p '{{ bastion_password }}' ssh {{ ssh_opts }}
+        {{ bastion_user }}@{{ bastion_host }}
+        "virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
+        -i {{ ssh_key_path }} {{ virtctl_ssh_opts }}
+        -c 'cat /etc/fstab && echo FSTAB_OK || echo FSTAB_MISSING'"
       register: r_fstab_restored
-      when: virt_launcher_pod_post is defined
+      until: >-
+        r_fstab_restored.rc == 0 and
+        'FSTAB_OK' in (r_fstab_restored.stdout | default(''))
+      retries: 30
+      delay: 10
+      changed_when: false
       ignore_errors: true
 
     # ---------------------------------------------------------------
