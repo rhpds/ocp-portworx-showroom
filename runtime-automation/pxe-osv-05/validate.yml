@@ -112,7 +112,7 @@
         {{ bastion_user }}@{{ bastion_host }}
         "virtctl ssh {{ ssh_user }}@vm/{{ vm_name }}/{{ vm_namespace }}
         -i {{ ssh_key_path }} {{ virtctl_ssh_opts }}
-        -c 'df /data | awk \"NR==2{print (\\\$2 >= 9437184) ? \\\"SIZE_OK\\\" : \\\"SIZE_SMALL\\\"}\"' 2>&1"
+        -c 'df -BG /data --output=size | tail -1' 2>&1"
       register: r_df_check
       changed_when: false
       ignore_errors: true
@@ -139,7 +139,8 @@
         _task7_ok: >-
           {{ r_df_check is not skipped and
              r_df_check is not failed and
-             'SIZE_OK' in (r_df_check.stdout | default('')) }}
+             (r_df_check.stdout | default('') | regex_search('(\d+)G') | default('0')
+              | regex_replace('G','') | int) >= 9 }}
 
     # -------------------------------------------------------
     # Validate all tasks
@@ -164,4 +165,4 @@
           {{ '[ OK ]' if _task4_ok else '[FAIL]' }} Task 4: Autopilot event — {{ 'ActiveActionsTaken' if _task4_ok else 'not fired — fill disk first, wait 15-20 min' }}
           {{ '[ OK ]' if _task5_ok else '[FAIL]' }} Task 5: PVC capacity — {{ '>= 10Gi' if _task5_ok else 'current: ' + (pvc_capacity | default('unknown')) + ' — wait for Autopilot' }}
           {{ '[ OK ]' if _task6_ok else '[FAIL]' }} Task 6: /data — {{ 'mounted with file' if _task6_ok else 'not ready — partition/format/mount /dev/vdb and fill with shred' }}
-          {{ '[ OK ]' if _task7_ok else '[FAIL]' }} Task 7: filesystem — {{ '>= 9G' if _task7_ok else 'too small — resize partition and filesystem' }}
+          {{ '[ OK ]' if _task7_ok else '[FAIL]' }} Task 7: filesystem — {{ '>= 9G' if _task7_ok else 'too small (got: ' + (r_df_check.stdout | default('unknown') | trim) + ') — resize partition and filesystem' }}
